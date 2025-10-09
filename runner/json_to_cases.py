@@ -36,6 +36,7 @@ def get_positive_int(j_obj, key, default):
 
 @dataclass(slots=True)
 class GemmCase:
+    cuda_arch: str
     json_name: str
     proc_name: str
     run_function: str
@@ -53,6 +54,7 @@ class GemmCase:
 
 @dataclass(slots=True)
 class GemvCase:
+    cuda_arch: str
     json_name: str
     proc_name: str
     run_function: str
@@ -98,7 +100,7 @@ gemm_no_split_k_keys = {
     "K_divisor", "K_max",
 }
 
-def add_gemm_case(fname, j_obj):
+def add_gemm_case(fname, cuda_arch, j_obj):
     proc = j_obj["proc"]
     args = j_obj["args"]
     batch_support = "L" in args
@@ -117,6 +119,7 @@ def add_gemm_case(fname, j_obj):
         if key not in allowed_keys:
             raise ValueError(f"Unknown key {key!r}, not in {allowed_keys!r}")
     case_obj = GemmCase(
+        cuda_arch,
         fname,
         proc,
         "run_" + proc,
@@ -160,7 +163,7 @@ gemv_keys = {
     "K_divisor", "K_max",
 }
 
-def add_gemv_case(fname, j_obj):
+def add_gemv_case(fname, cuda_arch, j_obj):
     proc = j_obj["proc"]
     case_obj = GemvCase(fname, proc, "run_" + proc)
     args = j_obj["args"]
@@ -172,6 +175,11 @@ for fname in json_fnames:
     try:
         proc_name = None
         j = json.load(open(fname, "r"))
+        fname_without_dir = os.path.split(fname)[1]
+        underscore_split = fname_without_dir.split("_")
+        assert len(underscore_split) >= 2
+        assert underscore_split[0] == "exocc"
+        cuda_arch = underscore_split[1]
         for j_obj in j:
             # Parse proc_name first so user has context for any subsequent errors.
             proc_name = j_obj["proc"]
@@ -181,9 +189,9 @@ for fname in json_fnames:
                 raise ValueError(f"proc name collision, previously added by {old_json!r}")
             proc_name_to_json[proc_name] = fname
             if algorithm == "gemm":
-                add_gemm_case(fname, j_obj)
+                add_gemm_case(fname, cuda_arch, j_obj)
             elif algorithm == "gemv":
-                add_gemv_case(fname, j_obj)
+                add_gemv_case(fname, cuda_arch, j_obj)
             else:
                 raise ValueError(f"Unknown algorithm {algorithm!r}")
             # Reset before next loop iteration to avoid misleading error message.
@@ -201,6 +209,7 @@ c_lines.append(f"extern const int num_user_gemm_cases = {len(user_gemm_cases)};"
 c_lines.append("extern const GemmCase user_gemm_cases[] = {")
 for gemm_case in user_gemm_cases:
     c_lines.append("  GemmCase{")
+    c_lines.append(f'    CudaArch::{gemm_case.cuda_arch},')
     c_lines.append(f'    {json.dumps(gemm_case.json_name)},')
     c_lines.append(f'    {json.dumps(gemm_case.proc_name)},')
     c_lines.append(f"    {gemm_case.run_function},")
@@ -219,6 +228,7 @@ c_lines.append(f"extern const int num_user_gemv_cases = {len(user_gemv_cases)};"
 c_lines.append("extern const GemvCase user_gemv_cases[] = {")
 for gemv_case in user_gemv_cases:
     c_lines.append("  GemvCase{")
+    c_lines.append(f'    CudaArch::{gemv_case.cuda_arch},')
     c_lines.append(f"    {json.dumps(gemv_case.json_name)},")
     c_lines.append(f"    {json.dumps(gemv_case.proc_name)},")
     c_lines.append(f"    {gemv_case.run_function},")
