@@ -11,6 +11,7 @@ import shlex
 
 sporkbench_dir = os.path.split(__file__)[0]
 python3 = sys.executable
+exocc = os.environ.get("EXO_EXOCC", "exocc")
 nvcc = os.environ.get("EXO_NVCC", "nvcc")
 cxx = os.environ.get("EXO_CXX", "g++-12")
 ninja = os.environ.get("EXO_NINJA", "ninja")
@@ -105,6 +106,7 @@ archcode90a = -arch compute_90a -code sm_90a,compute_90a
 archcode80 = -arch compute_80 -code sm_80,sm_90a,compute_80
 nvcc_bin = {Qarg(nvcc)}
 cxx = {Qarg(cxx)}
+exocc = {Qarg(exocc)}
 python3 = {Qarg(python3)}
 nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
@@ -139,7 +141,7 @@ for i, src_info in enumerate(exocc_sources):
     d_name = bin_stem + ".d"
     arch = src_info.arch
     build.write(f"\nrule exocc_{i}\n")
-    build.write(f"  command = exocc $in -o {Qarg(out_dir)}\n")  # Don't use Qpath here.
+    build.write(f"  command = $exocc $in -o {Qarg(out_dir)}\n")  # Don't use Qpath here.
     build.write(f"  depfile = {Qpath(d_name)}\n")
     build.write(f"build {Qpath(c_name)} $\n")
     build.write(f"      {Qpath(cu_name)} $\n")

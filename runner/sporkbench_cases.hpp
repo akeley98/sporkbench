@@ -1,5 +1,8 @@
 #pragma once
 
+#include <cublas_v2.h>
+#include <cuda_runtime.h>
+
 namespace sporkbench {
 
 enum class CudaArch
@@ -30,8 +33,8 @@ struct GemvSize
 };
 
 // A is row major (both functions), B and C are column major.
-typedef void (*GemmRun)(GemmSize size, const float* A, const float* B, float* C);
-typedef void (*GemvRun)(GemvSize size, const float* A, const float* x, float* y);
+typedef void (*GemmRun)(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
+typedef void (*GemvRun)(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
 
 struct GemmCase
 {
@@ -50,15 +53,14 @@ struct GemmCase
     int K_cluster_divisor;
     int K_cluster_max;
 
-    bool supports(GemmSize size, int cuda_cc_major, int cuda_cc_minor) const
+    bool supports(GemmSize size) const
     {
         return (
-            cuda_arch_supports(cuda_arch, cuda_cc_major, cuda_cc_minor) &&
-            size.L < L_max && size.L % L_divisor == 0 &&
-            size.M < M_max && size.M % M_divisor == 0 &&
-            size.N < N_max && size.N % N_divisor == 0 &&
-            size.K_split < K_split_max && size.K_split % K_split_divisor == 0 &&
-            size.K_cluster < K_cluster_max && size.K_cluster % K_cluster_divisor == 0
+            size.L <= L_max && size.L % L_divisor == 0 &&
+            size.M <= M_max && size.M % M_divisor == 0 &&
+            size.N <= N_max && size.N % N_divisor == 0 &&
+            size.K_split <= K_split_max && size.K_split % K_split_divisor == 0 &&
+            size.K_cluster <= K_cluster_max && size.K_cluster % K_cluster_divisor == 0
         );
     }
 };
@@ -74,12 +76,11 @@ struct GemvCase
     int K_divisor;
     int K_max;
 
-    bool supports(GemvSize size, int cuda_cc_major, int cuda_cc_minor) const
+    bool supports(GemvSize size) const
     {
         return (
-            cuda_arch_supports(cuda_arch, cuda_cc_major, cuda_cc_minor) &&
-            size.M < M_max && size.M % M_divisor == 0 &&
-            size.K < K_max && size.K % K_divisor == 0
+            size.M <= M_max && size.M % M_divisor == 0 &&
+            size.K <= K_max && size.K % K_divisor == 0
         );
     }
 };
@@ -87,13 +88,14 @@ struct GemvCase
 // These are supposed to be generated from the user's JSON files.
 extern const GemmCase user_gemm_cases[];
 extern const int num_user_gemm_cases;
-extern const GemmCase builtin_gemm_cases[];
-extern const int num_builtin_gemm_cases;
-
-// sporkbench_builtin_cases.cu
 extern const GemvCase user_gemv_cases[];
 extern const int num_user_gemv_cases;
+
+// sporkbench_builtin_cases.cu
+extern const GemmCase builtin_gemm_cases[];
+extern const int num_builtin_gemm_cases;
 extern const GemvCase builtin_gemv_cases[];
 extern const int num_builtin_gemv_cases;
+void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
 
 }

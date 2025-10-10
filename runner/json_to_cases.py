@@ -132,7 +132,7 @@ def add_gemm_case(fname, cuda_arch, j_obj):
         K_split_divisor=get_positive_int(j_obj, "K_split_divisor", 1),
         K_split_max=get_positive_int(j_obj, "K_split_max", int32_max if split_k_support else 1),
         K_cluster_divisor=get_positive_int(j_obj, K_divisor_key, 4),
-        K_cluster_max=get_positive_int(j_obj, K_max_key, 4),
+        K_cluster_max=get_positive_int(j_obj, K_max_key, int32_max),
     )
     if not batch_support and case_obj.L_max != 1:
         raise ValueError(f"L argument must be listed if L_max != 1")
@@ -148,7 +148,7 @@ def add_gemm_case(fname, cuda_arch, j_obj):
             c_args.append(arg_name)
         else:
             raise ValueError(f"Unknown arg name {arg_name!r}")
-    c_lines.append(f"static void run_{proc}(GemmSize size, const float* A, const float* B, float* C)")
+    c_lines.append(f"static void run_{proc}(cublasHandle_t, GemmSize size, const float* A, const float* B, float* C)")
     c_lines.append("{")
     c_lines.append("    void* ctxt = nullptr;")
     c_lines.append(f"    {proc}({', '.join(c_args)});")
@@ -219,6 +219,8 @@ for gemm_case in user_gemm_cases:
     c_lines.append(f"    {gemm_case.K_split_divisor}, {gemm_case.K_split_max},  // K_split")
     c_lines.append(f"    {gemm_case.K_cluster_divisor}, {gemm_case.K_cluster_max},  // K_cluster")
     c_lines.append("  },")
+if not user_gemm_cases:
+    c_lines.append("  {}")
 c_lines.append("};\n")
 
 
@@ -235,6 +237,8 @@ for gemv_case in user_gemv_cases:
     c_lines.append(f"    {gemv_case.M_divisor}, {gemv_case.M_max},")
     c_lines.append(f"    {gemv_case.K_divisor}, {gemv_case.K_max},")
     c_lines.append("  },")
+if not user_gemv_cases:
+    c_lines.append("  {}")
 c_lines.append("};\n")
 
 c_lines.append("\n}  // end namespace")
