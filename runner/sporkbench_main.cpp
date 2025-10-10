@@ -16,7 +16,7 @@ namespace sporkbench
 
 static std::vector<std::tuple<int, int, int>> generate_mnk_sizes()
 {
-    return {{2048, 2048, 2048}, {4096, 4096, 4096}, {8192, 8192, 8192}, {2816, 768, 65536}};
+    return {{2048, 2048, 2048}, {4096, 4096, 4096}, {7680, 7680, 8192}, {2816, 768, 65536}};
 }
 
 struct AsyncDeleter

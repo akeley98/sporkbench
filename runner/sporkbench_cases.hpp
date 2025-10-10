@@ -25,6 +25,15 @@ inline bool cuda_arch_supports(CudaArch cuda_arch, int cuda_cc_major, int cuda_c
 struct GemmSize
 {
     int L, M, N, K_split, K_cluster;
+
+    constexpr size_t C_row_major_index(int batch, int m, int n) const
+    {
+        return size_t(batch) * M * N + size_t(n) * M + m;
+    }
+    constexpr size_t C_col_major_index(int batch, int m, int n) const
+    {
+        return size_t(batch) * M * N + size_t(m) * N + n;
+    }
 };
 
 struct GemvSize
@@ -32,9 +41,12 @@ struct GemvSize
     int M, K;
 };
 
-// A is row major (both functions), B and C are column major.
 typedef void (*GemmRun)(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
 typedef void (*GemvRun)(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
+
+constexpr int A_row_major_flag = 1;
+constexpr int B_row_major_flag = 2;
+constexpr int C_row_major_flag = 4;
 
 struct GemmCase
 {
@@ -42,6 +54,7 @@ struct GemmCase
     const char* json_name;
     const char* proc_name;
     GemmRun run_function;
+    int flags;
     int L_divisor;
     int L_max;
     int M_divisor;

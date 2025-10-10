@@ -8,6 +8,7 @@ cases.append({
     "proc": "xgemm_Sm90_wgmma_n256",
     "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
     "K_split_max": 1,
+    "A_major": "row", "B_major": "col", "C_major": "col",
 })
 
 xgemm_Sm90_wgmma_n128 = make_Sm90_gemm(128, 2, 2)
@@ -16,6 +17,7 @@ cases.append({
     "proc": "xgemm_Sm90_wgmma_n128",
     "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
     "K_split_max": 1,
+    "A_major": "row", "B_major": "col", "C_major": "col",
 })
 
 import json

@@ -34,12 +34,22 @@ def get_positive_int(j_obj, key, default):
     raise ValueError(f"{key}={n}; expected positive int")
 
 
+def get_row_major(j_obj, key):
+    n = j_obj.get(key, "<not provided>")
+    if n == "row":
+        return True
+    if n == "col" or n == "column":
+        return False
+    raise ValueError(f'{key}={n}; expected "row" or "column" or "col"')
+
+
 @dataclass(slots=True)
 class GemmCase:
     cuda_arch: str
     json_name: str
     proc_name: str
     run_function: str
+    flags: str
     L_divisor: int
     L_max: int
     M_divisor: int
@@ -84,7 +94,7 @@ c_lines.append("\n\nnamespace sporkbench {\n")
 
 
 gemm_split_k_keys = {
-    "proc", "args", "algorithm",
+    "proc", "args", "algorithm", "A_major", "B_major", "C_major",
     "L_divisor", "L_max",
     "M_divisor", "M_max",
     "N_divisor", "N_max",
@@ -93,7 +103,7 @@ gemm_split_k_keys = {
 }
 
 gemm_no_split_k_keys = {
-    "proc", "args", "algorithm",
+    "proc", "args", "algorithm", "row_major", "A_major", "B_major", "C_major",
     "L_divisor", "L_max",
     "M_divisor", "M_max",
     "N_divisor", "N_max",
@@ -118,11 +128,22 @@ def add_gemm_case(fname, cuda_arch, j_obj):
     for key in j_obj:
         if key not in allowed_keys:
             raise ValueError(f"Unknown key {key!r}, not in {allowed_keys!r}")
+    
+    flag_list = []
+    if get_row_major(j_obj, "A_major"):
+        flag_list.append("A_row_major_flag")
+    if get_row_major(j_obj, "B_major"):
+        flag_list.append("B_row_major_flag")
+    if get_row_major(j_obj, "C_major"):
+        flag_list.append("C_row_major_flag")
+    flags = (" | ".join(flag_list)) or "0"
+    
     case_obj = GemmCase(
         cuda_arch,
         fname,
         proc,
         "run_" + proc,
+        flags,
         L_divisor=get_positive_int(j_obj, "L_divisor", 1),
         L_max=get_positive_int(j_obj, "L_max", int32_max if batch_support else 1),
         M_divisor=get_positive_int(j_obj, "M_divisor", 4),
@@ -213,6 +234,7 @@ for gemm_case in user_gemm_cases:
     c_lines.append(f'    {json.dumps(gemm_case.json_name)},')
     c_lines.append(f'    {json.dumps(gemm_case.proc_name)},')
     c_lines.append(f"    {gemm_case.run_function},")
+    c_lines.append(f"    {gemm_case.flags},")
     c_lines.append(f"    {gemm_case.L_divisor}, {gemm_case.L_max},  // L")
     c_lines.append(f"    {gemm_case.M_divisor}, {gemm_case.M_max},  // M")
     c_lines.append(f"    {gemm_case.N_divisor}, {gemm_case.N_max},  // N")

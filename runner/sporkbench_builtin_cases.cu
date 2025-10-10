@@ -8,6 +8,7 @@ namespace sporkbench {
 
 #define CUBLAS_CHECK(x) if (auto _cublas_status = x; _cublas_status != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "%s:%i cublas status %i\n", __FILE__, __LINE__, (int)_cublas_status); }
 
+// This is expecting A row major, B and C column major.
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C)
 {
     assert(cublasH);
@@ -42,6 +43,7 @@ extern const GemmCase builtin_gemm_cases[] = {
     "sporkbench_builtin_cases.cu",
     "cublas_gemm",
     run_cublas_gemm,
+    A_row_major_flag,
     1, INT32_MAX,  // L
     1, INT32_MAX,  // M
     1, INT32_MAX,  // N
