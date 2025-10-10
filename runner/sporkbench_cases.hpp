@@ -26,11 +26,11 @@ struct GemmSize
 {
     int L, M, N, K_split, K_cluster;
 
-    constexpr size_t C_row_major_index(int batch, int m, int n) const
+    constexpr size_t C_col_major_index(int batch, int m, int n) const
     {
         return size_t(batch) * M * N + size_t(n) * M + m;
     }
-    constexpr size_t C_col_major_index(int batch, int m, int n) const
+    constexpr size_t C_row_major_index(int batch, int m, int n) const
     {
         return size_t(batch) * M * N + size_t(m) * N + n;
     }

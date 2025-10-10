@@ -8,41 +8,11 @@
 #include <stdio.h>
 #include <vector>
 
+#include "sporkbench_pcg3d.hpp"
+
 namespace sporkbench {
 
 namespace sporkbench_test {
-
-enum class TestDataCode
-{
-    random = 0,
-    batch_index_identity = 1,
-    tiled_numbers = 2,
-    signs_only = 3,
-};
-
-// Copied pseudo random number generation code.
-// http://www.jcgt.org/published/0009/03/02/
-// Hash Functions for GPU Rendering, Mark Jarzynski, Marc Olano, NVIDIA
-__device__ uint64_t pcg3d(uint32_t x, uint32_t y, uint32_t z)
-{
-    x = x*1664525u + 1013904223u;
-    y = y*1664525u + 1013904223u;
-    z = z*1664525u + 1013904223u;
-
-    x += y*z;
-    y += z*x;
-    z += x*y;
-
-    x ^= x >> 16u;
-    y ^= y >> 16u;
-    z ^= z >> 16u;
-
-    x += y*z;
-    y += z*x;
-    z += x*y;
-
-    return x ^ uint64_t(y) << 12u ^ uint64_t(z) << 24u;
-}
 
 // k_major means that K is the "fast" dimension (i.e. K stride is 1, MN stride is K).
 // !k_major means that K is the "slow" dimension (i.e. K stride is MN, MN stride is 1).
@@ -177,14 +147,14 @@ __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, con
             if (cn == n && cm == m) {
                 printf("\x1b[1m");
             }
-            const size_t expected_linear_index = size.C_col_major_index(batch, m, n);
+            const size_t expected_linear_index = size.C_col_major_index(batch, cm, cn);
             size_t test_linear_index = expected_linear_index;
             if (test_row_major) {
-                test_linear_index = size.C_row_major_index(batch, m, n);
+                test_linear_index = size.C_row_major_index(batch, cm, cn);
             }
-            printf("[%6g, %5g]  ",
-                static_cast<double>(d_test[test_linear_index]),
-                static_cast<double>(d_expected[expected_linear_index]));
+            const double f_test = static_cast<double>(d_test[test_linear_index]);
+            const double f_expected = static_cast<double>(d_expected[expected_linear_index]);
+            printf("[%6g, %6g]  ", f_test, f_expected);
             if (cn == n && cm == m) {
                 printf("\x1b[0m");
             }
@@ -246,95 +216,89 @@ bool launch_device_compare_tensor(
 }
 
 
-TestResult run_gemm_case_test_data(
-        const GemmCase& gemm_case, cublasHandle_t cublasH, GemmSize size,
-        float* A, float* B, float* C_test, float* C_expected,
-        TestDataCode A_code, TestDataCode B_code, int test_count, cudaStream_t stream)
+double run_gemm_case_impl(
+        const GemmCase& gemm_case, const GemmTestResources& resources, GemmSize size, cudaStream_t stream)
 {
     const uint32_t L = uint32_t(size.L);
     const uint32_t M = uint32_t(size.M);
     const uint32_t N = uint32_t(size.N);
     const uint32_t K = uint32_t(size.K_split * size.K_cluster);
+    const float* A = (gemm_case.flags & A_row_major_flag) ? resources.A_row_major : resources.A_col_major;
+    assert(A);
+    const float* B = (gemm_case.flags & B_row_major_flag) ? resources.B_row_major : resources.B_col_major;
+    assert(B);
 
-    // For our use of cublas, we have A row major, B and C column major.
-    // Both A and B are K-major per Nvidia's terminology.
-    launch_init_test_data(A, L, M, K, true, A_code, stream);
-    launch_init_test_data(B, L, N, K, true, B_code, stream);
-    run_cublas_gemm(cublasH, size, A, B, C_expected);
+    cudaMemsetAsync(resources.L2_shred_memory, 0xCC, resources.L2_shred_bytes, stream);
+    cudaEventRecord(resources.start_event, stream);
+    assert(stream == 0);  // Change run_function to take stream argument.
+    gemm_case.run_function(resources.cublasH, size, A, B, resources.C_test);
+    cudaEventRecord(resources.end_event, stream);
 
-    std::vector<float> test_times(test_count);
-    std::vector<cudaEvent_t> test_events(test_count + 1);
-    auto new_event = [stream]
-    {
-        cudaEvent_t event{};
-        if (const cudaError_t err = cudaEventCreate(&event)) {
-            throw std::runtime_error("cudaEventCreate failed\n");
-        }
-        cudaEventRecord(event, stream);
-        return event;
-    };
+    cudaStreamSynchronize(stream);
+    float ms;
+    cudaEventElapsedTime(&ms, resources.start_event, resources.end_event);
 
-    const bool A_row_major = bool(gemm_case.flags & A_row_major_flag);
-    const bool B_row_major = bool(gemm_case.flags & B_row_major_flag);
-    launch_init_test_data(A, L, M, K, A_row_major, A_code, stream);   // K-major == A row major
-    launch_init_test_data(B, L, N, K, !B_row_major, B_code, stream);  // K-major == B column major
-    for (int test_i = 0; test_i < test_count; ++test_i) {
-        if (test_i == 0) {
-            test_events[0] = new_event();
-        }
-        gemm_case.run_function(cublasH, size, A, B, C_test);
-        test_events[test_i + 1] = new_event();
-    }
-    const bool exact = A_code == TestDataCode::signs_only && B_code == TestDataCode::signs_only && K <= 4096;
-    const bool test_row_major = bool(gemm_case.flags & C_row_major_flag);
-    const bool passed = launch_device_compare_tensor(
-            size, gemm_case.proc_name, C_test, C_expected, test_row_major,
-            exact, stream);
-
-    for (int test_i = 0; test_i < test_count; ++test_i) {
-        cudaEventElapsedTime(&test_times[test_i], test_events[test_i], test_events[test_i + 1]);
-        cudaEventDestroy(test_events[test_i]);
-    }
-    cudaEventDestroy(test_events[test_count]);
-    std::sort(&test_times[0], &test_times[test_count]);
-    const double median_ms = test_times[test_count / 2];
-    const double flops = double(L) * M * N * K * 2000.0 / median_ms;
-    return TestResult{passed, flops};
+    const double flops = double(L) * M * N * K * 2000.0 / ms;
+    return flops;
 }
 
 }  // end namespace sporkbench_test
 
-TestResult run_gemm_case(
-        const GemmCase& gemm_case, cublasHandle_t cublasH, GemmSize size,
-        float* A, float* B, float* C_test, float* C_expected,
-        bool warmup, int num_trials)
+void init_test_data(const GemmTestResources& resources, GemmSize size, TestDataCode A_code, TestDataCode B_code)
 {
     using namespace ::sporkbench::sporkbench_test;
     const cudaStream_t stream = 0;
-    assert(num_trials > 0);
+    const auto K = size.K_cluster * size.K_split;
+
+    if (resources.A_row_major) {
+        launch_init_test_data(resources.A_row_major, size.L, size.M, K, true, A_code, stream);
+    }
+    if (resources.A_col_major) {
+        launch_init_test_data(resources.A_col_major, size.L, size.M, K, false, A_code, stream);
+    }
+    if (resources.B_row_major) {
+        // false is the K-major flag. Not "row major".
+        launch_init_test_data(resources.B_row_major, size.L, size.N, K, false, B_code, stream);
+    }
+    if (resources.B_col_major) {
+        launch_init_test_data(resources.B_col_major, size.L, size.N, K, true, B_code, stream);
+    }
+
+    // K-major inputs required to initialize expected data.
+    assert(resources.A_row_major);
+    assert(resources.B_col_major);
+    run_cublas_gemm(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected);
+}
+
+TestResult run_gemm_case(
+        const GemmCase& gemm_case, const GemmTestResources& resources, GemmSize size, TestCheckMode check_mode)
+{
+    using namespace ::sporkbench::sporkbench_test;
+    const cudaStream_t stream = 0;
 
     // Fill output C matrices with garbage.
-    cudaMemsetAsync(C_test, 0xDD, sizeof(C_test[0]) * size.L * size.M * size.N);
-
-    if (warmup) {
-        run_gemm_case_test_data(
-                gemm_case, cublasH, size, A, B, C_test, C_expected,
-                TestDataCode::batch_index_identity, TestDataCode::tiled_numbers, 1, stream);
-        run_gemm_case_test_data(
-                gemm_case, cublasH, size, A, B, C_test, C_expected,
-                TestDataCode::tiled_numbers, TestDataCode::batch_index_identity, 1, stream);
-        run_gemm_case_test_data(
-                gemm_case, cublasH, size, A, B, C_test, C_expected,
-                TestDataCode::signs_only, TestDataCode::signs_only, 1, stream);
+    if (check_mode != TestCheckMode::none) {
+        cudaMemsetAsync(resources.C_test, 0xDD, sizeof(resources.C_test[0]) * size.L * size.M * size.N);
     }
-    const TestResult result = run_gemm_case_test_data(
-            gemm_case, cublasH, size, A, B, C_test, C_expected,
-            TestDataCode::random, TestDataCode::random, num_trials, stream);
+
+    const double flops = run_gemm_case_impl(gemm_case, resources, size, stream);
+
+    bool passed = true;
+    if (check_mode != TestCheckMode::none) {
+        const bool test_row_major = bool(gemm_case.flags & C_row_major_flag);
+        const bool exact = (check_mode == TestCheckMode::exact);
+        passed = launch_device_compare_tensor(
+                size, gemm_case.proc_name, resources.C_test, resources.C_expected, test_row_major, exact, stream);
+    }
+
     cudaStreamSynchronize(stream);
     cudaError_t err = cudaGetLastError();
     if (err) {
         throw std::runtime_error(cudaGetErrorString(err));
     }
+    TestResult result{};
+    result.flops = flops;
+    result.passed = passed;
     return result;
 }
 
