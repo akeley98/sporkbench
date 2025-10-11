@@ -76,6 +76,13 @@ struct GemmCase
             size.K_cluster <= K_cluster_max && size.K_cluster % K_cluster_divisor == 0
         );
     }
+
+    // These are supposed to be generated from the user's JSON files.
+    static const GemmCase user_cases[];
+    static const int num_user_cases;
+    // sporkbench_builtin_cases.cu
+    static const GemmCase builtin_cases[];
+    static const int num_builtin_cases;
 };
 
 struct GemvCase
@@ -96,19 +103,17 @@ struct GemvCase
             size.K <= K_max && size.K % K_divisor == 0
         );
     }
+
+    // These are supposed to be generated from the user's JSON files.
+    static const GemvCase user_cases[];
+    static const int num_user_cases;
+    // sporkbench_builtin_cases.cu
+    static const GemvCase builtin_cases[];
+    static const int num_builtin_cases;
 };
 
-// These are supposed to be generated from the user's JSON files.
-extern const GemmCase user_gemm_cases[];
-extern const int num_user_gemm_cases;
-extern const GemvCase user_gemv_cases[];
-extern const int num_user_gemv_cases;
 
 // sporkbench_builtin_cases.cu
-extern const GemmCase builtin_gemm_cases[];
-extern const int num_builtin_gemm_cases;
-extern const GemvCase builtin_gemv_cases[];
-extern const int num_builtin_gemv_cases;
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
 
 }

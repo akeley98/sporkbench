@@ -37,7 +37,7 @@ void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, cons
     }
 }
 
-extern const GemmCase builtin_gemm_cases[] = {
+const GemmCase GemmCase::builtin_cases[] = {
   GemmCase{
     CudaArch::Sm80,
     "sporkbench_builtin_cases.cu",
@@ -51,7 +51,7 @@ extern const GemmCase builtin_gemm_cases[] = {
     1, INT32_MAX,  // K_cluster
   },
 };
-extern const int num_builtin_gemm_cases = sizeof(builtin_gemm_cases) / sizeof(builtin_gemm_cases[0]);
+const int GemmCase::num_builtin_cases = sizeof(GemmCase::builtin_cases) / sizeof(GemmCase::builtin_cases[0]);
 
 }  // end namespace
 

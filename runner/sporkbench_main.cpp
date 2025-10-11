@@ -87,14 +87,14 @@ int Main(int argc, char** argv)
     std::vector<KernelCaseEntry<GemmCase>> gemm_case_entries;
     std::vector<int> gemm_case_permutations;
 
-    for (int case_i = 0; case_i < num_user_gemm_cases + num_builtin_gemm_cases; ++case_i) {
+    for (int case_i = 0; case_i < GemmCase::num_user_cases + GemmCase::num_builtin_cases; ++case_i) {
         KernelCaseEntry<GemmCase> entry{};
-        if (case_i < num_user_gemm_cases) {
-            entry.p_case = &user_gemm_cases[case_i];
+        if (case_i < GemmCase::num_user_cases) {
+            entry.p_case = &GemmCase::user_cases[case_i];
             entry.is_builtin = false;
         }
         else {
-            entry.p_case = &builtin_gemm_cases[case_i - num_user_gemm_cases];
+            entry.p_case = &GemmCase::builtin_cases[case_i - GemmCase::num_user_cases];
             entry.is_builtin = true;
         }
 

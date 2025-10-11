@@ -226,8 +226,8 @@ for fname in json_fnames:
 
 # Generate user_gemm_cases array.
 # We previously already generated the wrapper run_* functions.
-c_lines.append(f"extern const int num_user_gemm_cases = {len(user_gemm_cases)};")
-c_lines.append("extern const GemmCase user_gemm_cases[] = {")
+c_lines.append(f"const int GemmCase::num_user_cases = {len(user_gemm_cases)};")
+c_lines.append("const GemmCase GemmCase::user_cases[] = {")
 for gemm_case in user_gemm_cases:
     c_lines.append("  GemmCase{")
     c_lines.append(f'    CudaArch::{gemm_case.cuda_arch},')
@@ -248,8 +248,8 @@ c_lines.append("};\n")
 
 # Generate user_gemv_cases array.
 # We previously already generated the wrapper run_* functions.
-c_lines.append(f"extern const int num_user_gemv_cases = {len(user_gemv_cases)};")
-c_lines.append("extern const GemvCase user_gemv_cases[] = {")
+c_lines.append(f"const int GemvCase::num_user_cases = {len(user_gemv_cases)};")
+c_lines.append("const GemvCase GemvCase::user_cases[] = {")
 for gemv_case in user_gemv_cases:
     c_lines.append("  GemvCase{")
     c_lines.append(f'    CudaArch::{gemv_case.cuda_arch},')
