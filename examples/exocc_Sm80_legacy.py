@@ -64,13 +64,16 @@ def gemv_warp_coop_8_smem(
                         # This is written strangely; we can't access tmp[0, 0, 0]
                         # directly, due to distributed memory deduction rules.
                         for k1 in cuda_threads(0, 2, unit=cuda_thread):
+                            tmp_scalar: f32 @ CudaRmem
+                            tmp_scalar = tmp[k4, k2, k1]
                             if k4 == 0:
                                 if k2 == 0:
                                     if k1 == 0:
-                                        d_y[m1 * gemv_M0 + m0] = tmp[k4, k2, k1]
+                                        d_y[m1 * gemv_M0 + m0] = tmp_scalar
             Fence(cuda_in_order, cuda_in_order)
 
 
+gemv_warp_coop_8_smem = simplify(gemv_warp_coop_8_smem)
 gemv_warp_coop_8_smem.sync_check(M=256, K=128)
 
 
@@ -129,12 +132,15 @@ def gemv_warp_coop_8(
                         # This is written strangely; we can't access tmp[0, 0, 0]
                         # directly, due to distributed memory deduction rules.
                         for k1 in cuda_threads(0, 2, unit=cuda_thread):
+                            tmp_scalar: f32 @ CudaRmem
+                            tmp_scalar = tmp[k4, k2, k1]
                             if k4 == 0:
                                 if k2 == 0:
                                     if k1 == 0:
-                                        d_y[m1 * gemv_M0 + m0] = tmp[k4, k2, k1]
+                                        d_y[m1 * gemv_M0 + m0] = tmp_scalar
 
 
+gemv_warp_coop_8 = simplify(gemv_warp_coop_8)
 gemv_warp_coop_8.sync_check(M=256, K=128)
 
 
