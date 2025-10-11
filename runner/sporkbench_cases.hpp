@@ -96,6 +96,10 @@ struct GemvCase
     int K_divisor;
     int K_max;
 
+    // For now we hard-wire all gemv kernels not to do split K.
+    static constexpr int K_split_divisor = 1;
+    static constexpr int K_split_max = 1;
+
     bool supports(GemvSize size) const
     {
         return (
