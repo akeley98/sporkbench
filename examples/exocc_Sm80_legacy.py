@@ -160,7 +160,7 @@ M1 = 192
 N1 = 256  # Does not change gracefully
 
 K0 = 16
-MMA_K = 4
+MMA_K = 4  # Does not change gracefully
 
 
 @proc
@@ -272,8 +272,6 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
     assert M % M1 == 0
     assert N % N1 == 0
 
-    cudaMemsetAsync0_2f32(M, N, C[:,:])
-
     with CudaDeviceFunction(blockDim = 256, blocks_per_sm = 1):
         for m2 in cuda_tasks(0, M / M1):
             for n2 in cuda_tasks(0, N / N1):
@@ -282,8 +280,8 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
                 war: barrier(raw) @ CudaMbarrier
 
                 # Tiles (ring buffer)
-                A_smem : f32[RING, M1, K0] @ CudaSmemLinear
-                B_smem : f32[RING, K0, N1] @ CudaSmemLinear
+                A_smem : f32[RING, K0 / 4, M1, 4] @ CudaSmemLinear
+                B_smem : f32[RING, N1 / 8, K0, 8] @ CudaSmemLinear
 
                 # Zero-out accumulator (warp code)
                 D_rmem : f32[M1/Mw, N1/Nw, Mw/16, Nw/8, 16, 8] @ Sm80_RmemMatrixD(16, 8)
@@ -306,7 +304,7 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
                         for m1 in seq(0, M1 / 64):
                             for m0 in cuda_threads(0, 64, unit=4 * cuda_thread):
                                 for k0 in cuda_threads(0, 4, unit=cuda_thread):
-                                    Sm80_cp_async_f32(A_smem[k1 % RING, m1 * 64 + m0, 4 * k0 : 4 * k0 + 4],
+                                    Sm80_cp_async_f32(A_smem[k1 % RING, k0, m1 * 64 + m0, :],
                                                       A[m2 * M1 + m1 * 64 + m0,
                                                       k1 * K0 + k0 * 4 : k1 * K0 + k0 * 4 + 4],
                                                       size=4)
@@ -315,7 +313,12 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
                         for k0_seq in seq(0, 4):
                             for k0_par in cuda_threads(0, 4, unit=64 * cuda_thread):
                                 for n0 in cuda_threads(0, 64, unit=cuda_thread):
-                                    Sm80_cp_async_f32(B_smem[k1 % RING, k0_seq * 4 + k0_par, 4 * n0 : 4 * n0 + 4],
+                                    Sm80_cp_async_f32(B_smem[
+                                                          k1 % RING,
+                                                          n0 / 2,
+                                                          k0_seq * 4 + k0_par,
+                                                          (n0 % 2) * 4: (n0 % 2) * 4 + 4,
+                                                      ],
                                                       B[k1 * K0 + k0_seq * 4 + k0_par,
                                                       n2 * N1 + 4 * n0 : n2 * N1 + 4 * n0 + 4], size=4)
                         Arrive(Sm80_cp_async, 1) >> raw
@@ -331,9 +334,10 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
                                 for n_seq in seq(0, Nw / 8, pragma_unroll=0):
                                     for k_seq in seq(0, K0 / MMA_K, pragma_unroll=0):
                                         Sm80_mma_load_b_tf32(B_rmem[k_seq,n_seq,:,:],
-                                                             B_smem[(k1 - LAG) % RING,
-                                                             k_seq*MMA_K:(k_seq+1)*MMA_K,
-                                                             nw*Nw + n_seq*8 : nw*Nw + (n_seq+1)*8], K=MMA_K)
+                                                             B_smem[
+                                                                 (k1 - LAG) % RING,
+                                                                 nw*(Nw/8) + n_seq,
+                                                                 k_seq*MMA_K:(k_seq+1)*MMA_K, :], K=MMA_K)
 
                                 for m_seq in seq(0, Mw / 16, pragma_unroll=0):
                                     # Load A matrix tiles needed for m iteration
@@ -341,8 +345,8 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
                                     for k_seq in seq(0, K0 / MMA_K, pragma_unroll=0):
                                         Sm80_mma_load_a_tf32(A_rmem[k_seq,:,:],
                                                              A_smem[(k1 - LAG) % RING,
-                                                             mw*Mw + m_seq*16 : mw*Mw + (m_seq+1)*16,
-                                                             k_seq*MMA_K:(k_seq+1)*MMA_K], K=MMA_K)
+                                                             k_seq,
+                                                             mw*Mw + m_seq*16 : mw*Mw + (m_seq+1)*16, :], K=MMA_K)
                                     # Accumulate to tile of warp tiles owned by warp.
                                     for n_seq in seq(0, Nw / 8, pragma_unroll=0):
                                         for k_seq in seq(0, K0 / MMA_K, pragma_unroll=0):
@@ -358,7 +362,7 @@ def xgemm_Sm80_mbarrier(M: size, N: size, K: size, A: f32[M,K] @ CudaGmemLinear,
                     for nw in cuda_threads(0, N1 / Nw, unit=cuda_warp):
                         for m_seq in seq(0, Mw / 16, pragma_unroll=0):
                             for n_seq in seq(0, Nw / 8, pragma_unroll=0):
-                                Sm80_mma_atomic_reduce_d_tf32(
+                                Sm80_mma_store_d_tf32(
                                     C[m2 * M1 + mw * Mw + m_seq * 16 : m2 * M1 + mw * Mw + (m_seq+1) * 16,
                                     n2 * N1 + nw * Nw + n_seq * 8 : n2 * N1 + nw * Nw + (n_seq+1) * 8],
                                     D_rmem[mw,nw,m_seq,n_seq,:,:])
