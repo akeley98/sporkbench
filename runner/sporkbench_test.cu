@@ -140,7 +140,7 @@ __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, con
     uint32_t m_min = m < 2 ? 0u : m - 2;
     uint32_t m_max = m + 2 >= size.M ? size.M - 1u : m + 2;
     uint32_t n_min = n < 2 ? 0u : n - 2;
-    uint32_t n_max = n + 2 >= size.N ? n - 1u : n + 2;
+    uint32_t n_max = n + 2 >= size.N ? size.N - 1u : n + 2;
 
     for (uint32_t cm = m_min; cm <= m_max; cm++) {
         for (uint32_t cn = n_min; cn <= n_max; cn++) {
@@ -242,6 +242,24 @@ double run_gemm_case_impl(
     return flops;
 }
 
+double run_gemv_case_impl(
+        const GemvCase& gemv_case, const GemvTestResources& resources, GemvSize size, cudaStream_t stream)
+{
+    cudaMemsetAsync(resources.L2_shred_memory, 0xCC, resources.L2_shred_bytes, stream);
+    cudaEventRecord(resources.start_event, stream);
+    assert(stream == 0);  // Change run_function to take stream argument.
+    gemv_case.run_function(resources.cublasH, size, resources.A, resources.x, resources.y_test);
+    cudaEventRecord(resources.end_event, stream);
+
+    cudaStreamSynchronize(stream);
+    float ms;
+    cudaEventElapsedTime(&ms, resources.start_event, resources.end_event);
+
+    const double flops = double(size.M) * size.K * 2000.0 / ms;
+    return flops;
+}
+
+
 }  // end namespace sporkbench_test
 
 void init_test_data(const GemmTestResources& resources, GemmSize size, TestDataCode A_code, TestDataCode B_code)
@@ -289,6 +307,53 @@ TestResult run_gemm_case(
         const bool exact = (check_mode == TestCheckMode::exact);
         passed = launch_device_compare_tensor(
                 size, gemm_case.proc_name, resources.C_test, resources.C_expected, test_row_major, exact, stream);
+    }
+
+    cudaStreamSynchronize(stream);
+    cudaError_t err = cudaGetLastError();
+    if (err) {
+        throw std::runtime_error(cudaGetErrorString(err));
+    }
+    TestResult result{};
+    result.flops = flops;
+    result.passed = passed;
+    return result;
+}
+
+void init_test_data(const GemvTestResources& resources, GemvSize size, TestDataCode A_code, TestDataCode B_code)
+{
+    using namespace ::sporkbench::sporkbench_test;
+    const int L = 1;
+    const cudaStream_t stream = 0;
+    launch_init_test_data(resources.A, L, size.M, size.K, true, A_code, stream);
+    launch_init_test_data(resources.x, L, 1, size.K, true, B_code, stream);
+    run_cublas_gemv(resources.cublasH, size, resources.A, resources.x, resources.y_expected);
+}
+
+TestResult run_gemv_case(
+        const GemvCase& gemv_case, const GemvTestResources& resources, GemvSize size, TestCheckMode check_mode)
+{
+    using namespace ::sporkbench::sporkbench_test;
+    const cudaStream_t stream = 0;
+
+    // Fill output y_test with garbage.
+    if (check_mode != TestCheckMode::none) {
+        cudaMemsetAsync(resources.y_test, 0xDD, sizeof(resources.y_test[0]) * size.M);
+    }
+
+    const double flops = run_gemv_case_impl(gemv_case, resources, size, stream);
+
+    bool passed = true;
+    if (check_mode != TestCheckMode::none) {
+        GemmSize gemm_size{};
+        gemm_size.L = 1;
+        gemm_size.M = size.M;
+        gemm_size.N = 1;
+        gemm_size.K_split = 1;
+        gemm_size.K_cluster = size.K;
+        const bool exact = (check_mode == TestCheckMode::exact);
+        passed = launch_device_compare_tensor(
+                gemm_size, gemv_case.proc_name, resources.y_test, resources.y_expected, true, exact, stream);
     }
 
     cudaStreamSynchronize(stream);

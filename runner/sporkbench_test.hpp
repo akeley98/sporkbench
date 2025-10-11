@@ -42,9 +42,27 @@ struct GemmTestResources
     void* L2_shred_memory;
 };
 
+struct GemvTestResources
+{
+    cublasHandle_t cublasH;
+    cudaEvent_t start_event;
+    cudaEvent_t end_event;
+    float* A;
+    float* x;
+    float* y_test;
+    float* y_expected;
+    size_t L2_shred_bytes;
+    void* L2_shred_memory;
+};
+
 void init_test_data(const GemmTestResources& resources, GemmSize size, TestDataCode A_code, TestDataCode B_code);
 
 TestResult run_gemm_case(
         const GemmCase& gemm_case, const GemmTestResources& resources, GemmSize size, TestCheckMode check_mode);
+
+void init_test_data(const GemvTestResources& resources, GemvSize size, TestDataCode A_code, TestDataCode B_code);
+
+TestResult run_gemv_case(
+        const GemvCase& gemv_case, const GemvTestResources& resources, GemvSize size, TestCheckMode check_mode);
 
 }  // end namespace

@@ -19,6 +19,7 @@ namespace sporkbench
 bool global_all_passed = true;
 constexpr int num_warmup = 4;
 constexpr int num_timed = 100;
+constexpr size_t L2_shred_bytes = 1u << 27;
 
 struct TestDataConfig
 {
@@ -45,6 +46,18 @@ static std::vector<std::tuple<int, int, int, int>> generate_gemm_sizes(bool is_h
             {1, 1536, 3840, 4096},
         };
     }
+}
+
+static std::vector<std::tuple<int, int>> generate_gemv_sizes(bool is_h100)
+{
+    (void)is_h100;
+
+    return {
+        {1024, 2048},
+        {2048, 2048},
+        {4096, 2048},
+        {4096, 4096},
+    };
 }
 
 struct AsyncDeleter
@@ -227,8 +240,8 @@ int Main(int argc, char** argv)
             union_not_flags |= ~flags;
         }
 
-        printf("\n\nL = %i, MNK = [%i, %i, %i]\n", L, M, N, K);
-        constexpr size_t L2_shred_bytes = 1u << 27;
+        printf("\n\x1b[34m\x1b[1mGEMM:\x1b[0m\n");
+        printf("L = %i, MNK = [%i, %i, %i]\n", L, M, N, K);
         std::unique_ptr<float[], AsyncDeleter> unique_L2_shred_memory = alloc_f32(1, 1, L2_shred_bytes / 4u, deleter);
         std::unique_ptr<float[], AsyncDeleter> unique_C_test = alloc_f32(L, M, N, deleter);
         std::unique_ptr<float[], AsyncDeleter> unique_C_expected = alloc_f32(L, M, N, deleter);
@@ -313,6 +326,73 @@ int Main(int argc, char** argv)
         fprintf(stderr, "\n");
 
         for (KernelCaseEntry<GemmCase>& entry: gemm_case_entries) {
+            summarize_entry(entry);
+
+            // Clear flops samples vector for the next problem size.
+            entry.flops_samples.clear();
+        }
+    }
+
+    std::vector<KernelCaseEntry<GemvCase>> gemv_case_entries = generate_cases<GemvCase>(
+            &case_permutations, cuda_cc_major, cuda_cc_minor);
+
+    for (std::tuple<int, int> mk: generate_gemv_sizes(is_h100)) {
+        const int L = 1;
+        auto [M, K] = mk;
+        AsyncDeleter deleter{stream};
+        printf("\n\x1b[34m\x1b[1mGEMV:\x1b[0m\n");
+        printf("MK = [%i, %i]\n", M, K);
+
+        std::unique_ptr<float[], AsyncDeleter> unique_L2_shred_memory = alloc_f32(1, 1, L2_shred_bytes / 4u, deleter);
+        std::unique_ptr<float[], AsyncDeleter> unique_A = alloc_f32(L, M, K, deleter);
+        std::unique_ptr<float[], AsyncDeleter> unique_x = alloc_f32(L, 1, K, deleter);
+        std::unique_ptr<float[], AsyncDeleter> unique_y_test = alloc_f32(L, M, 1, deleter);
+        std::unique_ptr<float[], AsyncDeleter> unique_y_expected = alloc_f32(L, M, 1, deleter);
+
+        GemvTestResources resources{};
+        resources.cublasH = cublasH;
+        resources.start_event = start_event;
+        resources.end_event = end_event;
+        resources.A = unique_A.get();
+        resources.x = unique_x.get();
+        resources.y_test = unique_y_test.get();
+        resources.y_expected = unique_y_expected.get();
+        resources.L2_shred_bytes = L2_shred_bytes;
+        resources.L2_shred_memory = unique_L2_shred_memory.get();
+
+        for (int trial_i = 0; trial_i < num_warmup + num_timed; ++trial_i) {
+            TestDataConfig data_config = get_data_config(trial_i, K);
+
+            // Initialize test data on every warmup iteration, and the first timed iteration.
+            // Additional test data generation is not needed as timed iterations always use the same data.
+            if (trial_i < num_warmup + 1) {
+                GemvSize size{};
+                size.M = M;
+                size.K = K;
+                init_test_data(resources, size, data_config.A_code, data_config.B_code);
+            }
+
+            // Test kernels in a random order.
+            shuffle_ints(case_permutations, trial_i + 27182818, M * K);
+            for (auto entry_index : case_permutations) {
+                KernelCaseEntry<GemvCase>& entry = gemv_case_entries.at(entry_index);
+                const GemvCase& gemv_case = *entry.p_case;
+                GemvSize size{};
+                size.M = M;
+                size.K = K;
+                if (gemv_case.supports(size)) {
+                    TestResult result = run_gemv_case(gemv_case, resources, size, data_config.check_mode);
+                    global_all_passed &= result.passed;
+                    if (trial_i >= num_warmup) {
+                        entry.flops_samples.push_back(result.flops);
+                    }
+                }
+            };
+            fprintf(stderr, ".");
+        }
+        fprintf(stderr, "\n");
+
+        for (KernelCaseEntry<GemvCase>& entry: gemv_case_entries) {
             summarize_entry(entry);
 
             // Clear flops samples vector for the next problem size.

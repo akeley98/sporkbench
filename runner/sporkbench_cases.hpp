@@ -119,5 +119,6 @@ struct GemvCase
 
 // sporkbench_builtin_cases.cu
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
+void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
 
 }

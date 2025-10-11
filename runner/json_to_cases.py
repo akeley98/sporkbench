@@ -128,7 +128,7 @@ def add_gemm_case(fname, cuda_arch, j_obj):
     for key in j_obj:
         if key not in allowed_keys:
             raise ValueError(f"Unknown key {key!r}, not in {allowed_keys!r}")
-    
+
     flag_list = []
     if get_row_major(j_obj, "A_major"):
         flag_list.append("A_row_major_flag")
@@ -137,7 +137,7 @@ def add_gemm_case(fname, cuda_arch, j_obj):
     if get_row_major(j_obj, "C_major"):
         flag_list.append("C_row_major_flag")
     flags = (" | ".join(flag_list)) or "0"
-    
+
     case_obj = GemmCase(
         cuda_arch,
         fname,
@@ -186,9 +186,43 @@ gemv_keys = {
 
 def add_gemv_case(fname, cuda_arch, j_obj):
     proc = j_obj["proc"]
-    case_obj = GemvCase(fname, proc, "run_" + proc)
     args = j_obj["args"]
-    assert(0)  
+    allowed_keys = gemv_keys
+
+    for key in j_obj:
+        if key not in allowed_keys:
+            raise ValueError(f"Unknown key {key!r}, not in {allowed_keys!r}")
+
+    case_obj = GemvCase(
+        cuda_arch,
+        fname,
+        proc,
+        "run_" + proc,
+        M_divisor=get_positive_int(j_obj, "M_divisor", 4),
+        M_max=get_positive_int(j_obj, "M_max", int32_max),
+        K_divisor=get_positive_int(j_obj, "K_divisor", 4),
+        K_max=get_positive_int(j_obj, "K_max", int32_max),
+    )
+
+    # Generate run function
+    c_args = ["ctxt"]
+    for arg_name in args:
+        if arg_name == "K":
+            c_args.append("size.K")
+        elif arg_name == "M":
+            c_args.append("size.M")
+        elif arg_name in ("A", "x", "y"):
+            c_args.append(arg_name)
+        else:
+            raise ValueError(f"Unknown arg name {arg_name!r}")
+
+    c_lines.append(f"static void run_{proc}(cublasHandle_t, GemvSize size, const float* A, const float* x, float* y)")
+    c_lines.append("{")
+    c_lines.append("    void* ctxt = nullptr;")
+    c_lines.append(f"    {proc}({', '.join(c_args)});")
+    c_lines.append("}\n")
+
+    # Store gemv test case, to be added to the C++ array later.
     user_gemv_cases.append(case_obj)
 
 

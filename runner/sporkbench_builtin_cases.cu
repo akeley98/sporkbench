@@ -37,6 +37,20 @@ void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, cons
     }
 }
 
+void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y)
+{
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    assert(cublasH);
+    CUBLAS_CHECK(cublasSgemv(
+            cublasH, CUBLAS_OP_T,
+            size.K, size.M, &alpha,
+            A, size.K,
+            x, 1,
+            &beta,
+            y, 1));
+}
+
 const GemmCase GemmCase::builtin_cases[] = {
   GemmCase{
     CudaArch::Sm80,
@@ -51,7 +65,21 @@ const GemmCase GemmCase::builtin_cases[] = {
     1, INT32_MAX,  // K_cluster
   },
 };
+
 const int GemmCase::num_builtin_cases = sizeof(GemmCase::builtin_cases) / sizeof(GemmCase::builtin_cases[0]);
+
+const GemvCase GemvCase::builtin_cases[] = {
+  GemvCase{
+    CudaArch::Sm80,
+    "sporkbench_builtin_cases.cu",
+    "cublas_gemv",
+    run_cublas_gemv,
+    1, INT32_MAX,  // M
+    1, INT32_MAX,  // K
+  },
+};
+
+const int GemvCase::num_builtin_cases = sizeof(GemvCase::builtin_cases) / sizeof(GemvCase::builtin_cases[0]);
 
 }  // end namespace
 
