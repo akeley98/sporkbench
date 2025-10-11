@@ -114,9 +114,11 @@ nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner
 
 rule nvcc_Sm80
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d
+  depfile = $out.d
 
 rule nvcc_Sm90a
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a $in -o $out -MD -MF $out.d
+  depfile = $out.d
 
 rule link
   command = $nvcc_bin $nvcc_args $in -o $out -lcuda -lcublas
