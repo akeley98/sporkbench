@@ -483,6 +483,9 @@ int Main(int argc, char** argv)
         fprintf(stderr, "%s: accepts on argument, JSON output filename\n", argv[0]);
         return 1;
     }
+    else {
+        fprintf(stderr, "\x1b[31m\x1b[1mNOTE:\x1b[0m no JSON output given; sending to /dev/null\n");
+    }
     main_data.json_file = fopen(json_filename, "wb");
     if (!main_data.json_file) {
         fprintf(stderr, "%s: %s, %s\n", argv[0], strerror(errno), json_filename);
