@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <errno.h>
 #include <memory>
 #include <stdexcept>
 #include <stdio.h>
+#include <string>
+#include <string.h>
 #include <tuple>
 #include <vector>
 
@@ -21,6 +24,16 @@ constexpr int num_warmup = 4;
 constexpr int num_timed = 100;
 constexpr size_t L2_shred_bytes = 1u << 27;
 
+struct MainData
+{
+    int cuda_cc_major;
+    int cuda_cc_minor;
+    cudaStream_t stream;
+    cublasHandle_t cublasH;
+    cudaEvent_t start_event, end_event;
+    FILE* json_file;
+};
+
 struct TestDataConfig
 {
     TestDataCode A_code;
@@ -28,36 +41,73 @@ struct TestDataConfig
     TestCheckMode check_mode;
 };
 
-// (L, M, N, K)
-static std::vector<std::tuple<int, int, int, int>> generate_gemm_sizes(bool is_h100)
+struct GemmPlotSize
 {
+    int L, M, N, K;
+};
+
+struct GemmPlotInput
+{
+    std::string name;
+    std::string title;
+    std::string x_axis;
+    std::vector<GemmPlotSize> sizes;
+};
+
+struct GemvPlotSize
+{
+    int M, K;
+};
+
+struct GemvPlotInput
+{
+    std::string name;
+    std::string title;
+    std::string x_axis;
+    std::vector<GemvPlotSize> sizes;
+};
+
+std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
+{
+    std::vector<GemmPlotInput> plots;
+    GemmPlotInput non_batched{"gemm_non_batched", "GEMM, non-batched", "N", {}};
+    GemmPlotInput batched{"gemm_batched", "GEMM, batched, L=4", "N", {}};
+
+    auto tmp_add_MNK = [&] (int M, int N, int K)
+    {
+        non_batched.sizes.push_back(GemmPlotSize{1, M, N, K});
+        batched.sizes.push_back(GemmPlotSize{4, M, N, K});
+    };
+
     if (is_h100) {
-        return {
-            {1, 2048, 2048, 2048}, {4, 2048, 2048, 2048},
-            {1, 4096, 4096, 4096}, {4, 4096, 4096, 4096},
-            {1, 7680, 7680, 8192}, {4, 7680, 7680, 8192},
-            {1, 2816, 768, 65536}, {4, 2816, 768, 65536},
-        };
+        tmp_add_MNK(2048, 2048, 2048);
+        tmp_add_MNK(4096, 4096, 4096);
+        tmp_add_MNK(8192, 8192, 8192);
+        tmp_add_MNK(2816, 768, 65536);
+        plots.push_back(non_batched);
+        plots.push_back(batched);
     }
     else {
-        return {
-            {1, 1536, 1536, 1536},
-            {1, 3840, 1536, 4096},
-            {1, 1536, 3840, 4096},
-        };
+        tmp_add_MNK(1536, 1536, 8192);
+        tmp_add_MNK(3840, 1536, 4096);
+        tmp_add_MNK(1536, 3840, 4096);
+        tmp_add_MNK(3840, 3840, 2048);
+        plots.push_back(non_batched);
     }
+    return plots;
 }
 
-static std::vector<std::tuple<int, int>> generate_gemv_sizes(bool is_h100)
+std::vector<GemvPlotInput> generate_gemv_plot_inputs()
 {
-    (void)is_h100;
+    GemvPlotInput plot_input{};
+    plot_input.name = "gemv";
+    plot_input.title = "GEMV";
+    plot_input.x_axis = "K";
+    for (int m = 1024; m <= 8192; m *= 2) {
+        plot_input.sizes.push_back({m, m});
+    }
+    return {plot_input};
 
-    return {
-        {1024, 2048},
-        {2048, 2048},
-        {4096, 2048},
-        {4096, 4096},
-    };
 }
 
 struct AsyncDeleter
@@ -178,8 +228,20 @@ TestDataConfig get_data_config(int trial_i, int K)
 }
 
 template <typename KernelCase>
-void summarize_entry(KernelCaseEntry<KernelCase>& entry)
+void summarize_entry(const MainData& main_data, KernelCaseEntry<KernelCase>& entry, bool is_first)
 {
+    fprintf(main_data.json_file, "     %c{\n", is_first ? ' ' : ',');
+    fprintf(main_data.json_file, "        \"proc_name\": \"%s\",\n", entry.p_case->proc_name);
+    fprintf(main_data.json_file, "        \"K_split\": %i,\n", entry.K_split);
+    fprintf(main_data.json_file, "        \"is_builtin\": %s,\n", entry.is_builtin ? "true" : "false");
+    fprintf(main_data.json_file, "        \"flops_samples\": [");
+    bool need_comma = false;
+    for (double flops : entry.flops_samples) {
+        fprintf(main_data.json_file, "%s%.12e", need_comma ? ", " : "", flops);
+        need_comma = true;
+    }
+    fprintf(main_data.json_file, "],\n");
+
     // Average the IQR.
     std::sort(entry.flops_samples.begin(), entry.flops_samples.end());
     size_t iqr_begin = entry.flops_samples.size() / 4u;
@@ -193,45 +255,37 @@ void summarize_entry(KernelCaseEntry<KernelCase>& entry)
         accum += entry.flops_samples[i];
     }
     const int num_samples = int(iqr_end) - int(iqr_begin);
-    const double flops = num_samples != 0 ? accum / (iqr_end - iqr_begin) : 0.0;
+    const double flops_iqr = num_samples != 0 ? accum / (iqr_end - iqr_begin) : 0.0;
 
-    // Print info.
+    // Write flops_iqr to JSON; last item doesn't have a comma.
+    fprintf(main_data.json_file, "        \"flops_iqr\": %.12e\n", flops_iqr);
+
+    // Print info to stdout as well.
     const int color_code = entry.is_builtin ? 32 : entry.K_split > 1 ? 36 : 0;
     printf("%8.3f \x1b[%imTFLOPS\x1b[0m; K/%i, %s (samples=%i)\n",
-            flops / 1e12, color_code, entry.K_split, entry.p_case->proc_name, num_samples);
+            flops_iqr / 1e12, color_code, entry.K_split, entry.p_case->proc_name, num_samples);
+    fprintf(main_data.json_file, "     }\n");
 }
 
 
-int Main(int argc, char** argv)
+void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& plot_input)
 {
-    cudaSetDevice(0);
-
-    int cuda_cc_major{}, cuda_cc_minor{};
-    cudaDeviceGetAttribute(&cuda_cc_major, cudaDevAttrComputeCapabilityMajor, 0);
-    cudaDeviceGetAttribute(&cuda_cc_minor, cudaDevAttrComputeCapabilityMinor, 0);
-    const bool is_h100 = cuda_cc_major == 9 && cuda_cc_minor == 0;
-    fprintf(stderr, "is_h100: %i\n", is_h100);
-
+    bool need_comma = false;
     std::vector<int> case_permutations;
-    cudaEvent_t start_event, end_event;
-    if (const cudaError_t err = cudaEventCreate(&start_event)) {
-        throw std::runtime_error("cudaEventCreate failed\n");
-    }
-    if (const cudaError_t err = cudaEventCreate(&end_event)) {
-        throw std::runtime_error("cudaEventCreate failed\n");
-    }
-    cudaStream_t stream{};  // Not passed to test cases currently.
-    cublasHandle_t cublasH{};
-    CUBLAS_CHECK(cublasCreate(&cublasH));
-    CUBLAS_CHECK(cublasSetStream(cublasH, stream));
-    CUBLAS_CHECK(cublasSetMathMode(cublasH, CUBLAS_TF32_TENSOR_OP_MATH));
-
     std::vector<KernelCaseEntry<GemmCase>> gemm_case_entries = generate_cases<GemmCase>(
-            &case_permutations, cuda_cc_major, cuda_cc_minor);
+            &case_permutations, main_data.cuda_cc_major, main_data.cuda_cc_minor);
 
-    for (std::tuple<int, int, int, int> lmnk: generate_gemm_sizes(is_h100)) {
-        auto [L, M, N, K] = lmnk;
-        AsyncDeleter deleter{stream};
+    for (GemmPlotSize plot_size : plot_input.sizes) {
+        const int L = plot_size.L;
+        const int M = plot_size.M;
+        const int N = plot_size.N;
+        const int K = plot_size.K;
+
+        fprintf(main_data.json_file, "    %c{\"L\": %i, \"M\": %i, \"N\": %i, \"K\": %i, \"kernels\": [\n",
+                need_comma ? ',' : ' ', L, M, N, K);
+        need_comma = true;
+
+        AsyncDeleter deleter{main_data.stream};
         int union_flags = 0;
         int union_not_flags = 0;
         for (const KernelCaseEntry<GemmCase>& entry : gemm_case_entries) {
@@ -266,9 +320,9 @@ int Main(int argc, char** argv)
         }
 
         GemmTestResources resources{};
-        resources.cublasH = cublasH;
-        resources.start_event = start_event;
-        resources.end_event = end_event;
+        resources.cublasH = main_data.cublasH;
+        resources.start_event = main_data.start_event;
+        resources.end_event = main_data.end_event;
         resources.A_row_major = unique_A_row_major.get();
         resources.A_col_major = unique_A_col_major.get();
         resources.B_row_major = unique_B_row_major.get();
@@ -326,20 +380,34 @@ int Main(int argc, char** argv)
         fprintf(stderr, "\n");
 
         for (KernelCaseEntry<GemmCase>& entry: gemm_case_entries) {
-            summarize_entry(entry);
+            summarize_entry(main_data, entry, &entry == &gemm_case_entries[0]);
 
             // Clear flops samples vector for the next problem size.
             entry.flops_samples.clear();
         }
+
+        fprintf(main_data.json_file, "    ]}\n");
     }
+}
 
+
+void generate_gemv_plot_samples(const MainData& main_data, const GemvPlotInput& plot_input)
+{
+    bool need_comma = false;
+    std::vector<int> case_permutations;
     std::vector<KernelCaseEntry<GemvCase>> gemv_case_entries = generate_cases<GemvCase>(
-            &case_permutations, cuda_cc_major, cuda_cc_minor);
+            &case_permutations, main_data.cuda_cc_major, main_data.cuda_cc_minor);
 
-    for (std::tuple<int, int> mk: generate_gemv_sizes(is_h100)) {
+    for (GemvPlotSize plot_size : plot_input.sizes) {
         const int L = 1;
-        auto [M, K] = mk;
-        AsyncDeleter deleter{stream};
+        const int M = plot_size.M;
+        const int K = plot_size.K;
+
+        fprintf(main_data.json_file, "    %c{\"L\": %i, \"M\": %i, \"K\": %i, \"kernels\": [\n",
+                need_comma ? ',' : ' ', L, M, K);
+        need_comma = true;
+
+        AsyncDeleter deleter{main_data.stream};
         printf("\n\x1b[34m\x1b[1mGEMV:\x1b[0m\n");
         printf("MK = [%i, %i]\n", M, K);
 
@@ -350,9 +418,9 @@ int Main(int argc, char** argv)
         std::unique_ptr<float[], AsyncDeleter> unique_y_expected = alloc_f32(L, M, 1, deleter);
 
         GemvTestResources resources{};
-        resources.cublasH = cublasH;
-        resources.start_event = start_event;
-        resources.end_event = end_event;
+        resources.cublasH = main_data.cublasH;
+        resources.start_event = main_data.start_event;
+        resources.end_event = main_data.end_event;
         resources.A = unique_A.get();
         resources.x = unique_x.get();
         resources.y_test = unique_y_test.get();
@@ -393,12 +461,83 @@ int Main(int argc, char** argv)
         fprintf(stderr, "\n");
 
         for (KernelCaseEntry<GemvCase>& entry: gemv_case_entries) {
-            summarize_entry(entry);
+            summarize_entry(main_data, entry, &entry == &gemv_case_entries[0]);
 
             // Clear flops samples vector for the next problem size.
             entry.flops_samples.clear();
         }
+
+        fprintf(main_data.json_file, "    ]}\n");
     }
+}
+
+
+int Main(int argc, char** argv)
+{
+    MainData main_data{};
+    const char* json_filename = "/dev/null";
+    if (argc == 2) {
+        json_filename = argv[1];
+    }
+    else if (argc > 2) {
+        fprintf(stderr, "%s: accepts on argument, JSON output filename\n", argv[0]);
+        return 1;
+    }
+    main_data.json_file = fopen(json_filename, "wb");
+    if (!main_data.json_file) {
+        fprintf(stderr, "%s: %s, %s\n", argv[0], strerror(errno), json_filename);
+        return 1;
+    }
+
+    cudaSetDevice(0);
+    cudaDeviceGetAttribute(&main_data.cuda_cc_major, cudaDevAttrComputeCapabilityMajor, 0);
+    cudaDeviceGetAttribute(&main_data.cuda_cc_minor, cudaDevAttrComputeCapabilityMinor, 0);
+    const bool is_h100 = main_data.cuda_cc_major == 9 && main_data.cuda_cc_minor == 0;
+    fprintf(stderr, "is_h100: %i\n", is_h100);
+
+    if (const cudaError_t err = cudaEventCreate(&main_data.start_event)) {
+        throw std::runtime_error("cudaEventCreate failed\n");
+    }
+    if (const cudaError_t err = cudaEventCreate(&main_data.end_event)) {
+        throw std::runtime_error("cudaEventCreate failed\n");
+    }
+    main_data.stream = cudaStream_t{};  // Not passed to test cases currently.
+    CUBLAS_CHECK(cublasCreate(&main_data.cublasH));
+    CUBLAS_CHECK(cublasSetStream(main_data.cublasH, main_data.stream));
+    CUBLAS_CHECK(cublasSetMathMode(main_data.cublasH, CUBLAS_TF32_TENSOR_OP_MATH));
+
+    fprintf(main_data.json_file, "[\n");
+    bool need_comma = false;
+    auto begin_json_plot_object = [&] (const auto& plot_input)
+    {
+        fprintf(
+                main_data.json_file,
+                " %c{\"name\": \"%s\", \"title\": \"%s\", \"x_axis\": \"%s\", \"samples\": [\n",
+                need_comma ? ',' : ' ',
+                plot_input.name.c_str(),
+                plot_input.title.c_str(),
+                plot_input.x_axis.c_str()
+        );
+        need_comma = true;
+    };
+    auto end_json_plot_object = [&]
+    {
+        fprintf(main_data.json_file, "  ]}\n");
+    };
+
+    for (const GemmPlotInput& plot_input : generate_gemm_plot_inputs(is_h100)) {
+        begin_json_plot_object(plot_input);
+        generate_gemm_plot_samples(main_data, plot_input);
+        end_json_plot_object();
+    }
+
+    for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs()) {
+        begin_json_plot_object(plot_input);
+        generate_gemv_plot_samples(main_data, plot_input);
+        end_json_plot_object();
+    }
+
+    fprintf(main_data.json_file, "]\n");
 
     if (global_all_passed) {
         printf("All tests passed.\n");
@@ -407,7 +546,8 @@ int Main(int argc, char** argv)
         printf("\x1b[31m\x1b[1mFAILED:\x1b[0m Not all test cases passed!\n");
     }
 
-    cublasDestroy(cublasH);
+    fclose(main_data.json_file);
+    cublasDestroy(main_data.cublasH);
     return global_all_passed ? 0 : 1;
 }
 
