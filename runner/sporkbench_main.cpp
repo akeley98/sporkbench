@@ -70,29 +70,40 @@ struct GemvPlotInput
 std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
 {
     std::vector<GemmPlotInput> plots;
-    GemmPlotInput non_batched{"gemm_non_batched", "GEMM, non-batched", "N", {}};
-    GemmPlotInput batched{"gemm_batched", "GEMM, batched, L=4", "N", {}};
 
-    auto tmp_add_MNK = [&] (int M, int N, int K)
+    auto add_MNK = [] (int M, int N, int K, GemmPlotInput& non_batched, GemmPlotInput& batched)
     {
         non_batched.sizes.push_back(GemmPlotSize{1, M, N, K});
         batched.sizes.push_back(GemmPlotSize{4, M, N, K});
     };
 
     if (is_h100) {
-        tmp_add_MNK(2048, 2048, 2048);
-        tmp_add_MNK(4096, 4096, 4096);
-        tmp_add_MNK(8192, 8192, 8192);
-        tmp_add_MNK(2816, 768, 65536);
-        plots.push_back(non_batched);
-        plots.push_back(batched);
+        GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
+        GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
+        GemmPlotInput L1K65536{"L1K6556", "GEMM, non-batched, N=1536, K=65536", "M", {}};
+        for (int M = 256; M <= 4096; M += 256) {
+            const int N = 1536;
+            add_MNK(M, N, 512, L1K512, L4K512);
+            L1K65536.sizes.push_back({1, M, N, 65536});
+        }
+        plots.push_back(L1K512);
+        plots.push_back(L4K512);
+        plots.push_back(L1K65536);
+        GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
+        GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
+        for (int M = 2048; M <= 8192; M *= 2) {
+            add_MNK(M, M, M, L1_square, L4_square);
+        }
+        plots.push_back(L1_square);
+        plots.push_back(L4_square);
     }
     else {
-        tmp_add_MNK(1536, 1536, 8192);
-        tmp_add_MNK(3840, 1536, 4096);
-        tmp_add_MNK(1536, 3840, 4096);
-        tmp_add_MNK(3840, 3840, 2048);
-        plots.push_back(non_batched);
+        GemmPlotInput tmp{"gemm_non_batched", "GEMM, non-batched", "N", {}};
+        tmp.sizes.push_back({1, 1536, 1536, 8192});
+        tmp.sizes.push_back({1, 3840, 1536, 4096});
+        tmp.sizes.push_back({1, 1536, 3840, 4096});
+        tmp.sizes.push_back({1, 3840, 3840, 2048});
+        plots.push_back(tmp);
     }
     return plots;
 }

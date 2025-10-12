@@ -79,8 +79,8 @@ void launch_init_test_data(
 {
     const uint32_t major_extent = k_major ? MN : K;  // k_major is a stooopid name.
     const uint32_t minor_extent = k_major ? K : MN;
-    dim3 grid{(minor_extent + 255u) / 256u, major_extent, batch_size};
-    dim3 block{256, 1, 1};
+    dim3 grid{(minor_extent + 63u) / 64u, (major_extent + 3u) / 4u, batch_size};
+    dim3 block{64, 4, 1};
     device_init_test_data<<<grid, block, 0, stream>>>(d_tensor, batch_size, MN, K, k_major, code);
 }
 

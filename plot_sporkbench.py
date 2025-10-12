@@ -46,7 +46,7 @@ def plot(j_plot, output_dir_name):
     for i, label in enumerate(sorted(labels_y.keys())):
         y = labels_y[label]
         color = list(mcolors.TABLEAU_COLORS.keys())[i]
-        ax.plot(x, y, color=color, label=label)
+        ax.plot(x, y, marker='o', color=color, label=label)
     
     ax.grid()
     ax.legend()
@@ -68,5 +68,11 @@ if __name__ == "__main__":
     with open(json_filename, "rb") as json_f:
         j_top = json.load(json_f)
 
+    names_to_titles = {}
     for j_plot in j_top:
+        name = j_plot["name"]
+        title = j_plot["title"]
+        if name in names_to_titles:
+            raise ValueError(f"{name!r}: name collision\n{title}\n{names_to_titles[name]}")
+        names_to_titles[name] = title
         plot(j_plot, output_dir_name)
