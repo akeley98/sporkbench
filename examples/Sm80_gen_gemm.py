@@ -76,8 +76,8 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
         with CudaDeviceFunction(blockDim=blockDim, blocks_per_sm=blocks_per_sm):
           for batch in cuda_tasks(0, L):
             for k_task in cuda_tasks(0, K_splits):
-              for n_task in cuda_tasks(0, (N + smem_N - 1) / smem_N):
-                for m_task in cuda_tasks(0, (M + smem_M - 1) / smem_M):
+              for m_task in cuda_tasks(0, (M + smem_M - 1) / smem_M):
+                for n_task in cuda_tasks(0, (N + smem_N - 1) / smem_N):
                   # Per CTA code
                   raw: barrier @ CudaMbarrier
                   war: barrier(raw) @ CudaMbarrier
@@ -199,8 +199,8 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                   # Write out accumulator
                   for mw in cuda_threads(0, M_warps, unit=N_warps * cuda_warp):
                     for nw in cuda_threads(0, N_warps, unit=cuda_warp):
-                      for ms in seq(0, warp_M / 16):
-                        for ns in seq(0, warp_N / 8):
+                      for ns in seq(0, warp_N / 8):
+                        for ms in seq(0, warp_M / 16):
                           if n_task * smem_N + nw * warp_N + ns * 8 < N:
                             if m_task * smem_M + mw * warp_M + ms * 16 < M:
                               if enable_split_k:

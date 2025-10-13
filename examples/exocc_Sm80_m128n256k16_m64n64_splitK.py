@@ -4,7 +4,7 @@ config.smem_N = 128
 config.smem_K = 16
 config.warp_M = 64
 config.warp_N = 64
-config.enable_split_k = False
+config.enable_split_k = True
 config.blocks_per_sm = 1
 
 from Sm80_gen_gemm import *
