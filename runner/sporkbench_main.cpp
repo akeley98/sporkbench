@@ -89,25 +89,19 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
         plots.push_back(L1K512);
         plots.push_back(L4K512);
         plots.push_back(L1K65536);
-        GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
-        GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
-        for (int M = 512; M <= 4096; M += 512) {
-            add_MNK(M, M, M, L1_square, L4_square);
-        }
+    }
+    GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
+    GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
+    for (int M = 512; M <= 4096; M += 512) {
+        add_MNK(M, M, M, L1_square, L4_square);
+    }
+    if (is_h100) {
         for (int M = 2048 * 3; M <= 2048 * 6; M += 2048) {
             L1_square.sizes.push_back(GemmPlotSize{1, M, M, M});
         }
-        plots.push_back(L1_square);
-        plots.push_back(L4_square);
     }
-    else {
-        GemmPlotInput tmp{"gemm_non_batched", "GEMM, non-batched", "N", {}};
-        tmp.sizes.push_back({1, 1536, 1536, 8192});
-        tmp.sizes.push_back({1, 3840, 1536, 4096});
-        tmp.sizes.push_back({1, 1536, 3840, 4096});
-        tmp.sizes.push_back({1, 3840, 3840, 2048});
-        plots.push_back(tmp);
-    }
+    plots.push_back(L1_square);
+    plots.push_back(L4_square);
     return plots;
 }
 
