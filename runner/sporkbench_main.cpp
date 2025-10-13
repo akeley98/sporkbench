@@ -80,7 +80,7 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
     if (is_h100) {
         GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
         GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
-        GemmPlotInput L1K65536{"L1K6556", "GEMM, non-batched, N=1536, K=65536", "M", {}};
+        GemmPlotInput L1K65536{"L1K65536", "GEMM, non-batched, N=1536, K=65536", "M", {}};
         for (int M = 256; M <= 4096; M += 256) {
             const int N = 1536;
             add_MNK(M, N, 512, L1K512, L4K512);
@@ -91,8 +91,11 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
         plots.push_back(L1K65536);
         GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
         GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
-        for (int M = 2048; M <= 8192; M *= 2) {
+        for (int M = 512; M <= 4096; M += 512) {
             add_MNK(M, M, M, L1_square, L4_square);
+        }
+        for (int M = 2048 * 3; M <= 2048 * 6; M += 2048) {
+            L1_square.sizes.push_back(GemmPlotSize{1, M, M, M});
         }
         plots.push_back(L1_square);
         plots.push_back(L4_square);
@@ -120,6 +123,13 @@ std::vector<GemvPlotInput> generate_gemv_plot_inputs()
     return {plot_input};
 
 }
+
+static void no_op_warn_if_no_json()
+{
+
+}
+
+void (*warn_if_no_json)() = no_op_warn_if_no_json;
 
 struct AsyncDeleter
 {
@@ -292,6 +302,7 @@ void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& 
         const int N = plot_size.N;
         const int K = plot_size.K;
 
+        warn_if_no_json();
         fprintf(main_data.json_file, "    %c{\"L\": %i, \"M\": %i, \"N\": %i, \"K\": %i, \"kernels\": [\n",
                 need_comma ? ',' : ' ', L, M, N, K);
         need_comma = true;
@@ -414,6 +425,7 @@ void generate_gemv_plot_samples(const MainData& main_data, const GemvPlotInput& 
         const int M = plot_size.M;
         const int K = plot_size.K;
 
+        warn_if_no_json();
         fprintf(main_data.json_file, "    %c{\"L\": %i, \"M\": %i, \"K\": %i, \"kernels\": [\n",
                 need_comma ? ',' : ' ', L, M, K);
         need_comma = true;
@@ -482,7 +494,6 @@ void generate_gemv_plot_samples(const MainData& main_data, const GemvPlotInput& 
     }
 }
 
-
 int Main(int argc, char** argv)
 {
     MainData main_data{};
@@ -495,7 +506,10 @@ int Main(int argc, char** argv)
         return 1;
     }
     else {
-        fprintf(stderr, "\x1b[31m\x1b[1mNOTE:\x1b[0m no JSON output given; sending to /dev/null\n");
+        warn_if_no_json = []
+        {
+            fprintf(stderr, "\x1b[31m\x1b[1mNOTE:\x1b[0m no JSON output given; sending to /dev/null\n");
+        };
     }
     main_data.json_file = fopen(json_filename, "wb");
     if (!main_data.json_file) {

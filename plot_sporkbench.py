@@ -13,6 +13,7 @@ from matplotlib import ticker
 def plot(j_plot, output_dir_name):
     x_key = j_plot["x_axis"]
     fig = plt.figure(constrained_layout=True)
+    plt.title(j_plot["title"])
     ax = fig.gca()
     # ax2 = ax.twinx()
 
