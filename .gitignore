@@ -22,5 +22,5 @@ ninja
 elf.o
 *.sass
 *.py.json
-h100.json
-h100_plot
+/*.json
+*_plot
