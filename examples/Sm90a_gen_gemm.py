@@ -43,10 +43,10 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
     smem_box_C = (1, smem_N, smem_M)
 
     # K dimension of tensor is K_splits * cluster_k
-    # i.e. each task (cluster) is responsible for cluster_m * cluster_n * cluster_k
-    # We divide the K dim into [K_splits, cluster_k] as a workaround for Exo
+    # i.e. each task (cluster) is responsible for cluster_M * cluster_N * cluster_K
+    # We divide the K dim into [K_splits, cluster_K] as a workaround for Exo
     # quasi-affine indexing restrictions.
-    # Unfortunately, the caller has to manually pass cluster_k = K // K_splits.
+    # Unfortunately, the caller has to manually pass cluster_K = K // K_splits.
     @proc
     def xgemm_Sm90_wgmma(
         L: size, M: size, N: size, K_splits: size, cluster_K: size,
