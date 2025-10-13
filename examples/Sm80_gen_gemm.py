@@ -38,7 +38,6 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
             sync_name = "mbarrier"
             RING = config.mbarrier_ring
             LAG = config.mbarrier_lag
-            assert 0, "implement me"
         else:
             sync_name = "doubleBuf"
             RING = 2
@@ -48,7 +47,6 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
         assert not use_mbarrier
         RING = 1
         LAG = 0
-        assert 0, "implement me"
 
     # Number of 16-byte words in the K dimension of SMEM.
     smem_16B_K = smem_K // 4
@@ -72,12 +70,17 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
         assert N % N_divisor == 0
         assert K_cta % smem_K == 0
 
+        if enable_split_k:
+            cudaMemsetAsync0_3f32(L, N, M, C[:,:,:])
+
         with CudaDeviceFunction(blockDim=blockDim, blocks_per_sm=blocks_per_sm):
           for batch in cuda_tasks(0, L):
             for k_task in cuda_tasks(0, K_splits):
               for n_task in cuda_tasks(0, (N + smem_N - 1) / smem_N):
                 for m_task in cuda_tasks(0, (M + smem_M - 1) / smem_M):
                   # Per CTA code
+                  raw: barrier @ CudaMbarrier
+                  war: barrier(raw) @ CudaMbarrier
 
                   # Tiles (ring buffered)
                   A_smem: f32[RING, smem_16B_K, smem_M, 4] @ CudaSmemLinear
@@ -99,7 +102,8 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                     # Load SMEM except on final LAG-many iterations.
                     if k_iter < K_cta / smem_K:
                       if use_mbarrier:
-                        pass
+                        # Wait for ring buffer to be consumed; don't wait for first RING-many iterations
+                        Await(war, Sm80_generic, ~RING)
                       for kt in cuda_threads(0, smem_16B_K, unit=smem_team_size * cuda_thread):
                         for lane in cuda_threads(0, smem_team_size):
                           for ms in seq(0, smem_M_ITERS):
@@ -127,7 +131,7 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                                 ], size=4
                               )
                       if use_mbarrier:
-                        pass
+                        Arrive(Sm80_cp_async, 1) >> raw
 
                     # Single-buffer-only synchronization.
                     # Loaded values above immediately used in MMA below.
@@ -137,7 +141,8 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                     # MMA except on first LAG-many iterations.
                     if k_iter >= LAG:
                       if use_mbarrier:
-                        pass
+                        # Wait for ring buffer to be filled
+                        Await(raw, cuda_in_order, ~0)
 
                       for mw in cuda_threads(0, M_warps, unit=N_warps * cuda_warp):
                         for nw in cuda_threads(0, N_warps, unit=cuda_warp):
@@ -180,7 +185,7 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                         # End nw-warps loop
                       # End mw-warps loop
                       if use_mbarrier:
-                        pass
+                        Arrive(cuda_in_order, 1) >> war
 
                     # Synchronization between iterations, if not using mbarriers.
                     if use_mbarrier:
@@ -220,8 +225,15 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                                   ],
                                   D_rmem[mw, nw, ms, ns, :, :]
                                 )
+                  if use_mbarrier:
+                    # Epilogue fence when using mbarriers, to make re-use of
+                    # SMEM for the next task safe (persistent kernel).
+                    Fence(cuda_in_order, cuda_in_order)
 
     p = rename(p, config.make_proc_name(sync_name))
+    if not use_mbarrier:
+      p = delete_buffer(p, p.find_alloc_or_arg("war"))
+      p = delete_buffer(p, p.find_alloc_or_arg("raw"))
     p = simplify(p)
     K_splits = 2 if enable_split_k else 1
     p.sync_check(L=2, M=160, N=320, K_cta=smem_M * 5, K_splits=K_splits)
@@ -245,6 +257,6 @@ def add_case_helper(p: exo.Procedure):
 gemm_fence = make_Sm80_gemm(config, use_mbarrier=False)
 add_case_helper(gemm_fence)
 
-# if config.blocks_per_sm == 1:
-#     gemm_mbarrier = make_Sm80_gemm(config, use_mbarrier=True)
-#     add_case_helper(gemm_mbarrier)
+if config.blocks_per_sm == 1:
+    gemm_mbarrier = make_Sm80_gemm(config, use_mbarrier=True)
+    add_case_helper(gemm_mbarrier)
