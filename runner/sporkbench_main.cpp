@@ -547,16 +547,26 @@ int Main(int argc, char** argv)
         fprintf(main_data.json_file, "  ]}\n");
     };
 
-    for (const GemmPlotInput& plot_input : generate_gemm_plot_inputs(is_h100)) {
-        begin_json_plot_object(plot_input);
-        generate_gemm_plot_samples(main_data, plot_input);
-        end_json_plot_object();
+    if (GemmCase::num_user_cases > 0) {
+        for (const GemmPlotInput& plot_input : generate_gemm_plot_inputs(is_h100)) {
+            begin_json_plot_object(plot_input);
+            generate_gemm_plot_samples(main_data, plot_input);
+            end_json_plot_object();
+        }
+    }
+    else {
+        fprintf(stderr, "No user GemmCase instances, skipping...\n");
     }
 
-    for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs()) {
-        begin_json_plot_object(plot_input);
-        generate_gemv_plot_samples(main_data, plot_input);
-        end_json_plot_object();
+    if (GemvCase::num_user_cases > 0) {
+        for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs()) {
+            begin_json_plot_object(plot_input);
+            generate_gemv_plot_samples(main_data, plot_input);
+            end_json_plot_object();
+        }
+    }
+    else {
+        fprintf(stderr, "No user GemvCase instances, skipping...\n");
     }
 
     fprintf(main_data.json_file, "]\n");
