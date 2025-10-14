@@ -35,12 +35,23 @@ def schedule_Sm90a_gemm():
     cluster_M = smem_M * ncta_M
     cluster_N = smem_N * ncta_N
 
+    # CudaDeviceFunction context
+    my_warp_config = [
+        CudaWarpConfig("producer", 1, setmaxnreg_dec=40),
+        CudaWarpConfig("unused", 3, setmaxnreg_dec=40),
+        CudaWarpConfig("consumer", 8, setmaxnreg_inc=232),
+    ]
+    cuda_device_function_ctx = CudaDeviceFunction(
+        clusterDim=ncta_M * ncta_N,
+        warp_config=my_warp_config
+    )
+
     @proc
     def gemm(
             L: size, M: size, N: size, K_splits: size, K_cluster: size,
-            A: f32[L, M, K_splits, K_cluster],  # Row-major (K-major)
-            B: f32[L, N, K_splits, K_cluster],  # Column-major (K-major)
-            C: f32[L, N, M],  # Column-major
+            A: f32[L, M, K_splits, K_cluster] @ CudaGmemLinear,  # Row-major (K-major)
+            B: f32[L, N, K_splits, K_cluster] @ CudaGmemLinear,  # Column-major (K-major)
+            C: f32[L, N, M] @ CudaGmemLinear,  # Column-major
     ):
         # assert K_cluster % K_smem == 0
         assert K_cluster % 4 == 0
@@ -80,7 +91,7 @@ def schedule_Sm90a_gemm():
     gap_before_main = k_loop.before()
     gap_after_main = k_loop.after()
 
-    # Set up cuda_tasks loops.
+    # Set up cuda_tasks loops and CudaDeviceFunction.
     gemm = set_loop_mode(gemm, batch_loop, CudaTasks)
     gemm = set_loop_mode(gemm, task_k_loop, CudaTasks)
     gemm = divide_loop(gemm, m_loop, cluster_M, ("task_m", "sub_task_m"), tail="guard")
@@ -91,6 +102,7 @@ def schedule_Sm90a_gemm():
     task_n_loop = gemm.forward(n_loop)
     sub_task_n_loop = task_n_loop.body()[0]
     gemm = set_loop_mode(gemm, task_n_loop, CudaTasks)
+    gemm = wrap_with_context(gemm, batch_loop, cuda_device_function_ctx)
 
     # Move task_n loop to be the outer most loop.
     gemm = lift_scope(gemm, task_n_loop)
@@ -194,7 +206,6 @@ def schedule_Sm90a_gemm():
     B_smem_loop = gemm.forward(B_smem_loop)
     B_smem_cta_n_loop = B_smem_loop.parent()
     B_smem_cta_m_loop = B_smem_cta_n_loop.parent()
-    print(B_smem_cta_m_loop)
     gemm = reorder_loops(gemm, B_smem_cta_m_loop)
     gemm = update_loop_mode(gemm, B_smem_cta_n_loop, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N))
     gemm = update_loop_mode(gemm, B_smem_cta_m_loop, unit=cuda_cta_in_cluster)
@@ -204,17 +215,26 @@ def schedule_Sm90a_gemm():
     wg_m_main_loop = gemm.forward(sub_cta_m_main_loop)
     gemm = set_loop_mode(gemm, wg_m_main_loop, CudaThreads(unit=cuda_warpgroup))
 
-    # Finalize zero prologue. TODO set cuda_threads loop, CudaWarps.
+    # Main loop warp specialization.
+    # I think there's 3 statements at this level right now.
+    # First two should be the A/B smem load, last one should be accum.
+    iter_k_loop = gemm.forward(iter_k_loop)
+    assert len(iter_k_loop.body()) == 3
+    gemm = wrap_with_context(gemm, iter_k_loop.body()[:2], CudaWarps(name="producer"))
+    gemm = wrap_with_context(gemm, iter_k_loop.body()[2], CudaWarps(name="consumer"))
+
+    # Finalize zero prologue. Warpgroup parallelization + consumer warps.
     D_zero = gemm.forward(D_zero)
     zero_m_loop = D_zero.parent().parent().parent().parent()  # TODO better way?
     gemm = divide_loop(gemm, zero_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
     gemm = set_loop_mode(gemm, zero_m_loop, CudaThreads(unit=cuda_warpgroup))
+    gemm = wrap_with_context(gemm, zero_m_loop, CudaWarps(name="consumer"))
     sub_wg_m_loop = gemm.forward(zero_m_loop).body()[0]
     if False:
         # TODO can't unify due to guards
         gemm = replace(gemm, sub_wg_m_loop, Sm90_zero_scale_d_f32(M=wg_M, N=wg_N))
 
-    # Finalize write-to-C epilogue.
+    # Finalize write-to-C epilogue. Warpgroup parallelization + consumer warps.
     if enable_split_k:
         assert 0
     else:
@@ -222,6 +242,7 @@ def schedule_Sm90a_gemm():
         assign_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
         gemm = divide_loop(gemm, assign_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
         gemm = set_loop_mode(gemm, assign_m_loop, CudaThreads(unit=cuda_warpgroup))
+        gemm = wrap_with_context(gemm, assign_m_loop, CudaWarps(name="consumer"))
         sub_wg_m_loop = gemm.forward(assign_m_loop).body()[0]
         gemm = replace(gemm, sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
 
