@@ -57,9 +57,9 @@ def schedule_Sm90a_gemm():
 
     # CudaDeviceFunction context
     my_warp_config = [
-        CudaWarpConfig("producer", 1, setmaxnreg_dec=40),
-        CudaWarpConfig("unused", 3, setmaxnreg_dec=40),
-        CudaWarpConfig("consumer", 8, setmaxnreg_inc=232),
+        CudaWarpConfig("producer", 1, setmaxnreg_dec=40),  # 1 producer warp
+        CudaWarpConfig("unused", 3, setmaxnreg_dec=40),    # 3 unused warps
+        CudaWarpConfig("consumer", 8, setmaxnreg_inc=232), # 2 consumer warpgroups (8 warps)
     ]
     cuda_device_function_ctx = CudaDeviceFunction(
         clusterDim=ncta_M * ncta_N,
@@ -136,6 +136,7 @@ def schedule_Sm90a_gemm():
     # task_m/task_n have constant bounds cluster_M, cluster_N.
     gemm = divide_loop(gemm, sub_task_m_loop, smem_M, ("cta_m", "sub_cta_m"), perfect=True)
     cta_m_loop = gemm.forward(sub_task_m_loop)
+    pre_fission_sub_cta_m_loop = cta_m_loop.body()[0]
     gemm = set_loop_mode(gemm, cta_m_loop, CudaThreads(unit=ncta_N * cuda_cta_in_cluster))
     gemm = divide_loop(gemm, sub_task_n_loop, smem_N, ("cta_n", "sub_cta_n"), perfect=True)
     n_cta_loop = gemm.forward(sub_task_n_loop)
@@ -145,10 +146,15 @@ def schedule_Sm90a_gemm():
     gemm = lift_scope(gemm, n_cta_loop)
     gemm = lift_scope(gemm, n_cta_loop)
 
+    # Divide the sub_cta_m loop into warpgroup loops.
+    gemm = divide_loop(gemm, pre_fission_sub_cta_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
+    gemm = set_loop_mode(gemm, pre_fission_sub_cta_m_loop, CudaThreads(unit=cuda_warpgroup))
+
     # expand dim of D_rmem so each iteration uses its own D_rmem.
     # This enables future parallelization.
     gemm = expand_dim(gemm, D_rmem, smem_N, "sub_cta_n")
-    gemm = expand_dim(gemm, D_rmem, smem_M, "sub_cta_m")
+    gemm = expand_dim(gemm, D_rmem, wg_M, "sub_wg_m")
+    gemm = expand_dim(gemm, D_rmem, 2, "wg_m")
     gemm = expand_dim(gemm, D_rmem, ncta_N, "cta_n")
     gemm = expand_dim(gemm, D_rmem, ncta_M, "cta_m")
     D_rmem = gemm.forward(D_rmem)
@@ -183,18 +189,18 @@ def schedule_Sm90a_gemm():
     D_rmem = gemm.forward(D_rmem)
     iter_k_loop = gemm.forward(iter_k_loop)
 
-    # Stage A_smem, B_smem tiles above sub_cta_m loop.
+    # Stage A_smem, B_smem tiles above wg_m loop.
     # TODO how to get a more stable reference to the input cursor.
-    # We can't rely on the old sub_cta_m cursor since it's forwarded to
+    # We can't rely on the old cursor since it's forwarded to
     # the wrong loop after fission.
     # TODO sucky that we have to use f-strings here; PAST can't get local variables???
-    sub_cta_m_main_loop = iter_k_loop.body()[0].body()[0].body()[0]
-    gemm = stage_mem(gemm, sub_cta_m_main_loop,
+    wg_m_main_loop = iter_k_loop.body()[0].body()[0].body()[0]
+    gemm = stage_mem(gemm, wg_m_main_loop,
         f"A[batch, "
         f"(task_m * {ncta_M} + cta_m) * {smem_M} : (task_m * {ncta_M} + cta_m + 1) * {smem_M}, "
         f"task_k, iter_k * {smem_K}: (iter_k + 1) * {smem_K}]",
         "A_smem")
-    gemm = stage_mem(gemm, sub_cta_m_main_loop,
+    gemm = stage_mem(gemm, wg_m_main_loop,
         f"B[batch, "
         f"(task_n * {ncta_N} + cta_n) * {smem_N} : (task_n * {ncta_N} + cta_n + 1) * {smem_N}, "
         f"task_k, iter_k * {smem_K}: (iter_k + 1) * {smem_K}]",
@@ -214,8 +220,8 @@ def schedule_Sm90a_gemm():
 
     # Fission CTA loops before and after B_smem load.
     # TODO how to get these cursors more elegantly?
-    sub_cta_m_main_loop = gemm.forward(sub_cta_m_main_loop)
-    B_smem_loop = sub_cta_m_main_loop.prev()
+    wg_m_main_loop = gemm.forward(wg_m_main_loop)
+    B_smem_loop = wg_m_main_loop.prev()
     A_smem_loop = B_smem_loop.prev()
     gemm = fission(gemm, B_smem_loop.before(), n_lifts=2, unsafe_disable_checks=unsafe)
     gemm = fission(gemm, B_smem_loop.after(), n_lifts=2, unsafe_disable_checks=unsafe)
@@ -245,9 +251,7 @@ def schedule_Sm90a_gemm():
 
     # wgmma M-warpgroup loop (children should be replaced with wgmma later)
     # Surround with mbarrier await/arrive (TODO)
-    gemm = divide_loop(gemm, sub_cta_m_main_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
-    wg_m_main_loop = gemm.forward(sub_cta_m_main_loop)
-    gemm = set_loop_mode(gemm, wg_m_main_loop, CudaThreads(unit=cuda_warpgroup))
+    wg_m_main_loop = gemm.forward(wg_m_main_loop)
     gemm = insert_noop_call(gemm, wg_m_main_loop.before(), PLACEHOLDER_RAW_AWAIT, [])
     gemm = insert_noop_call(gemm, wg_m_main_loop.after(), PLACEHOLDER_WAR_ARRIVE, [])
 
@@ -270,33 +274,30 @@ def schedule_Sm90a_gemm():
     gemm = wrap_with_context(gemm, iter_k_loop.body()[:2], CudaWarps(name="producer"))
     gemm = wrap_with_context(gemm, iter_k_loop.body()[2], CudaWarps(name="consumer"))
 
-    # Finalize zero prologue. Warpgroup parallelization + consumer warps.
+    # Finalize zero prologue.
     D_zero = gemm.forward(D_zero)
-    zero_m_loop = D_zero.parent().parent().parent().parent()  # TODO better way?
-    gemm = divide_loop(gemm, zero_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
-    gemm = set_loop_mode(gemm, zero_m_loop, CudaThreads(unit=cuda_warpgroup))
+    zero_m_loop = D_zero.parent().parent().parent().parent().parent()  # TODO better way?
     gemm = wrap_with_context(gemm, zero_m_loop, CudaWarps(name="consumer"))
     sub_wg_m_loop = gemm.forward(zero_m_loop).body()[0]
     if False:
         # TODO can't unify due to guards
         gemm = replace(gemm, sub_wg_m_loop, Sm90_zero_scale_d_f32(M=wg_M, N=wg_N))
 
-    # Finalize write-to-C epilogue. Warpgroup parallelization + consumer warps.
-    # Also need to wait for wgmma beforehand.
+    # Finalize write-to-C epilogue.
+    # Need to wait for wgmma beforehand.
     # This wait loop is fissioned out from the main epilogue.
     C_assign = gemm.forward(C_assign)
-    assign_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
-    gemm = divide_loop(gemm, assign_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
-    gemm = set_loop_mode(gemm, assign_m_loop, CudaThreads(unit=cuda_warpgroup))
-    gemm = wrap_with_context(gemm, assign_m_loop, CudaWarps(name="consumer"))
-    sub_wg_m_loop = gemm.forward(assign_m_loop).body()[0]
-    gemm = insert_noop_call(gemm, sub_wg_m_loop.before(), PLACEHOLDER_CG_AWAIT, [])
-    # Is there a better way to set n_lifts?
-    gemm = fission(gemm, sub_wg_m_loop.before(), n_lifts=4)
+    assign_wg_m_loop = C_assign.parent().parent().parent().parent().parent()  # TODO better way?
+    gemm = insert_noop_call(gemm, assign_wg_m_loop.body().before(), PLACEHOLDER_CG_AWAIT, [])
+    gemm = wrap_with_context(gemm, assign_wg_m_loop, CudaWarps(name="consumer"))
+    assign_wg_m_loop = gemm.forward(assign_wg_m_loop)
+    # TODO: is there a better way to set n_lifts?
+    gemm = fission(gemm, assign_wg_m_loop.body()[0].after(), n_lifts=4)
     if enable_split_k:
         assert 0
     else:
-        gemm = replace(gemm, sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
+        pass
+        # gemm = replace(gemm, assign_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
 
     # Insert cluster sync at the end.
     # For the non-split-k case, we can replace this with Arrive/Await
