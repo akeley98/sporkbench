@@ -10,13 +10,33 @@ from exo.platforms.Sm90 import *
 cases = []
 
 
-@instr("// placeholder arrive")
-def placeholder_arrive():
+@instr("// PLACEHOLDER_RAW_ARRIVE")
+def PLACEHOLDER_RAW_ARRIVE():
     pass
 
 
-@instr("// placeholder await")
-def placeholder_await():
+@instr("// PLACEHOLDER_RAW_AWAIT")
+def PLACEHOLDER_RAW_AWAIT():
+    pass
+
+
+@instr("// PLACEHOLDER_WAR_ARRIVE")
+def PLACEHOLDER_WAR_ARRIVE():
+    pass
+
+
+@instr("// PLACEHOLDER_WAR_AWAIT")
+def PLACEHOLDER_WAR_AWAIT():
+    pass
+
+
+@instr("// PLACEHOLDER_CG_ARRIVE")
+def PLACEHOLDER_CG_ARRIVE():
+    pass
+
+
+@instr("// PLACEHOLDER_CG_AWAIT")
+def PLACEHOLDER_CG_AWAIT():
     pass
 
 
@@ -104,10 +124,12 @@ def schedule_Sm90a_gemm():
     gemm = set_loop_mode(gemm, task_n_loop, CudaTasks)
     gemm = wrap_with_context(gemm, batch_loop, cuda_device_function_ctx)
 
-    # Move task_n loop to be the outer most loop.
+    # Move task_n loop outside, under batch, task_k loops.
+    # TODO is there a smart way to do this?
     gemm = lift_scope(gemm, task_n_loop)
     gemm = lift_scope(gemm, task_n_loop)
     gemm = lift_scope(gemm, task_n_loop)
+    inner_task_loop = task_m_loop
 
     # Generate CTA loops.
     # These are supposed to be perfect, because the inner loop from the
@@ -194,6 +216,7 @@ def schedule_Sm90a_gemm():
     # TODO how to get these cursors more elegantly?
     sub_cta_m_main_loop = gemm.forward(sub_cta_m_main_loop)
     B_smem_loop = sub_cta_m_main_loop.prev()
+    A_smem_loop = B_smem_loop.prev()
     gemm = fission(gemm, B_smem_loop.before(), n_lifts=2, unsafe_disable_checks=unsafe)
     gemm = fission(gemm, B_smem_loop.after(), n_lifts=2, unsafe_disable_checks=unsafe)
 
@@ -203,6 +226,7 @@ def schedule_Sm90a_gemm():
     # Therefore, to substitute the instruction later, we need to have cta_m inner.
     # Unlike CPU Exo, transposing these parallel loops requires us to rewrite
     # the unit, to still have the same assignment of loop iters to CTAs (manual for now).
+    A_smem_loop = gemm.forward(A_smem_loop)
     B_smem_loop = gemm.forward(B_smem_loop)
     B_smem_cta_n_loop = B_smem_loop.parent()
     B_smem_cta_m_loop = B_smem_cta_n_loop.parent()
@@ -210,10 +234,33 @@ def schedule_Sm90a_gemm():
     gemm = update_loop_mode(gemm, B_smem_cta_n_loop, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N))
     gemm = update_loop_mode(gemm, B_smem_cta_m_loop, unit=cuda_cta_in_cluster)
 
-    # M-warpgroup loop (children should be replaced with wgmma later)
+    # Insert arrive/await around SMEM load code.
+    # These are per-CTA statements.
+    # We then need to fission them from the SMEM load code,
+    # because the (inner) CTA loop for the SMEM load is part of the TMA instr.
+    gemm = insert_noop_call(gemm, A_smem_loop.before(), PLACEHOLDER_WAR_AWAIT, [])
+    gemm = fission(gemm, A_smem_loop.before(), n_lifts=1)
+    gemm = insert_noop_call(gemm, B_smem_loop.after(), PLACEHOLDER_RAW_ARRIVE, [])
+    gemm = fission(gemm, B_smem_loop.after(), n_lifts=1)
+
+    # wgmma M-warpgroup loop (children should be replaced with wgmma later)
+    # Surround with mbarrier await/arrive (TODO)
     gemm = divide_loop(gemm, sub_cta_m_main_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
     wg_m_main_loop = gemm.forward(sub_cta_m_main_loop)
     gemm = set_loop_mode(gemm, wg_m_main_loop, CudaThreads(unit=cuda_warpgroup))
+    gemm = insert_noop_call(gemm, wg_m_main_loop.before(), PLACEHOLDER_RAW_AWAIT, [])
+    gemm = insert_noop_call(gemm, wg_m_main_loop.after(), PLACEHOLDER_WAR_ARRIVE, [])
+
+    # wgmma K loop needs to be tiled by 8.
+    # Wrap these future wgmma instrs with wgmma.fence before, cg arrive after
+    gemm = divide_loop(gemm, sub_iter_k_loop, 8, ("k_mma", "k_sub_mma"), perfect=True)
+    k_mma_loop = gemm.forward(sub_iter_k_loop)
+    k_sub_mma_loop = k_mma_loop.body()[0]
+    gemm = insert_fence(gemm, k_sub_mma_loop.before(), wgmma_fence_1, wgmma_fence_2)
+    gemm = insert_noop_call(gemm, k_sub_mma_loop.after(), PLACEHOLDER_CG_ARRIVE, [])
+    # TODO after arrive, we need
+    # if k_iter >= 1:
+    #     Await(cg[cta_m,cta_n,wg], cuda_in_order, 1)
 
     # Main loop warp specialization.
     # I think there's 3 statements at this level right now.
@@ -235,16 +282,27 @@ def schedule_Sm90a_gemm():
         gemm = replace(gemm, sub_wg_m_loop, Sm90_zero_scale_d_f32(M=wg_M, N=wg_N))
 
     # Finalize write-to-C epilogue. Warpgroup parallelization + consumer warps.
+    # Also need to wait for wgmma beforehand.
+    # This wait loop is fissioned out from the main epilogue.
+    C_assign = gemm.forward(C_assign)
+    assign_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
+    gemm = divide_loop(gemm, assign_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
+    gemm = set_loop_mode(gemm, assign_m_loop, CudaThreads(unit=cuda_warpgroup))
+    gemm = wrap_with_context(gemm, assign_m_loop, CudaWarps(name="consumer"))
+    sub_wg_m_loop = gemm.forward(assign_m_loop).body()[0]
+    gemm = insert_noop_call(gemm, sub_wg_m_loop.before(), PLACEHOLDER_CG_AWAIT, [])
+    # Is there a better way to set n_lifts?
+    gemm = fission(gemm, sub_wg_m_loop.before(), n_lifts=4)
     if enable_split_k:
         assert 0
     else:
-        C_assign = gemm.forward(C_assign)
-        assign_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
-        gemm = divide_loop(gemm, assign_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
-        gemm = set_loop_mode(gemm, assign_m_loop, CudaThreads(unit=cuda_warpgroup))
-        gemm = wrap_with_context(gemm, assign_m_loop, CudaWarps(name="consumer"))
-        sub_wg_m_loop = gemm.forward(assign_m_loop).body()[0]
         gemm = replace(gemm, sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
+
+    # Insert cluster sync at the end.
+    # For the non-split-k case, we can replace this with Arrive/Await
+    # surrounding the store_d loop.
+    inner_task_loop = gemm.forward(inner_task_loop)
+    gemm = insert_fence(gemm, inner_task_loop.body().after(), cuda_in_order, cuda_in_order)
 
     # Substitute cuda memset for 0-init.
     if enable_split_k:
@@ -253,7 +311,7 @@ def schedule_Sm90a_gemm():
     # Specialize initial iteration of iter_k loop.
     # NB this doubles the size of the proc ... you can eliminate this
     # temporarily to make things easier to read.
-    if True:
+    if False:
         gemm = cut_loop(gemm, iter_k_loop, 1)
 
     gemm = simplify(gemm)
