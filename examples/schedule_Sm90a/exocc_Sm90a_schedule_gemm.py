@@ -257,12 +257,23 @@ def schedule_Sm90a_gemm():
 
     # wgmma K loop needs to be tiled by 8.
     # Wrap these future wgmma instrs with wgmma.fence before, cg arrive after
-    gemm = divide_loop(gemm, sub_iter_k_loop, 8, ("k_mma", "k_sub_mma"), perfect=True)
-    k_mma_loop = gemm.forward(sub_iter_k_loop)
-    k_sub_mma_loop = k_mma_loop.body()[0]
-    gemm = insert_fence(gemm, k_sub_mma_loop.before(), wgmma_fence_1, wgmma_fence_2)
-    gemm = insert_noop_call(gemm, k_sub_mma_loop.after(), PLACEHOLDER_CG_ARRIVE, [])
-    # TODO after arrive, we need
+    gemm = divide_loop(gemm, sub_iter_k_loop, 8, ("mma_k", "sub_mma_k"), perfect=True)
+    mma_k_loop = gemm.forward(sub_iter_k_loop)
+    sub_mma_k_loop = mma_k_loop.body()[0]
+    # Loop structure
+    # Fence(wgmma_fence_1, wgmma_fence_2)
+    # for mma_k_loop in seq(0, 4):  # Lifted out below
+    #     for sub_wg_m: ...  <-- replace with wgmma
+    #         ...
+    #             for sub_mma_k:
+    # Arrive(...) >> ...
+    for i in range(4):  # TODO again inelegant
+        gemm = lift_scope(gemm, mma_k_loop)
+    mma_k_loop = gemm.forward(mma_k_loop)
+    wgmma_cursor = mma_k_loop.body()[0]
+    gemm = insert_fence(gemm, mma_k_loop.before(), wgmma_fence_1, wgmma_fence_2)
+    gemm = insert_noop_call(gemm, mma_k_loop.after(), PLACEHOLDER_CG_ARRIVE, [])
+    # TODO after arrive, we need:
     # if k_iter >= 1:
     #     Await(cg[cta_m,cta_n,wg], cuda_in_order, 1)
 
