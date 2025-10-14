@@ -28,7 +28,7 @@ def plot(j_plot, output_dir_name):
     labels_y = {}
     for sample_index, j_sample in enumerate(j_sorted_samples):
         for j_kernel in j_sample["kernels"]:
-            proc_name = j_kernel["proc_name"]
+            proc_name = j_kernel["proc"]
             flops_iqr = j_kernel["flops_iqr"]
             tflops = flops_iqr / 1e12
             max_tflops = max(max_tflops, tflops)

@@ -246,7 +246,7 @@ template <typename KernelCase>
 void summarize_entry(const MainData& main_data, KernelCaseEntry<KernelCase>& entry, bool is_first)
 {
     fprintf(main_data.json_file, "     %c{\n", is_first ? ' ' : ',');
-    fprintf(main_data.json_file, "        \"proc_name\": \"%s\",\n", entry.p_case->proc_name);
+    fprintf(main_data.json_file, "        \"proc\": \"%s\",\n", entry.p_case->proc_name);
     fprintf(main_data.json_file, "        \"K_split\": %i,\n", entry.K_split);
     fprintf(main_data.json_file, "        \"is_builtin\": %s,\n", entry.is_builtin ? "true" : "false");
     fprintf(main_data.json_file, "        \"flops_samples\": [");
