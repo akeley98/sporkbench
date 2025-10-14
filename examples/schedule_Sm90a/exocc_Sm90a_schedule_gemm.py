@@ -287,7 +287,8 @@ def schedule_Sm90a_gemm():
     # Need to wait for wgmma beforehand.
     # This wait loop is fissioned out from the main epilogue.
     C_assign = gemm.forward(C_assign)
-    assign_wg_m_loop = C_assign.parent().parent().parent().parent().parent()  # TODO better way?
+    assign_sub_wg_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
+    assign_wg_m_loop = assign_sub_wg_m_loop.parent()
     gemm = insert_noop_call(gemm, assign_wg_m_loop.body().before(), PLACEHOLDER_CG_AWAIT, [])
     gemm = wrap_with_context(gemm, assign_wg_m_loop, CudaWarps(name="consumer"))
     assign_wg_m_loop = gemm.forward(assign_wg_m_loop)
@@ -297,7 +298,7 @@ def schedule_Sm90a_gemm():
         assert 0
     else:
         pass
-        # gemm = replace(gemm, assign_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
+        gemm = replace(gemm, assign_sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
 
     # Insert cluster sync at the end.
     # For the non-split-k case, we can replace this with Arrive/Await
