@@ -1,3 +1,4 @@
+#! /usr/bin/env python3
 # Thank you Rin Iwai for helping with this code.
 
 import json

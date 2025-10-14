@@ -245,6 +245,7 @@ double run_gemm_case_impl(
 double run_gemv_case_impl(
         const GemvCase& gemv_case, const GemvTestResources& resources, GemvSize size, cudaStream_t stream)
 {
+    // Update readme if you change the testing methodology.
     cudaMemsetAsync(resources.L2_shred_memory, 0xCC, resources.L2_shred_bytes, stream);
     cudaEventRecord(resources.start_event, stream);
     assert(stream == 0);  // Change run_function to take stream argument.
