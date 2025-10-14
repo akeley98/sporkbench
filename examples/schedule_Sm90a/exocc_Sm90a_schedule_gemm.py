@@ -10,6 +10,16 @@ from exo.platforms.Sm90 import *
 cases = []
 
 
+@instr("// placeholder arrive")
+def placeholder_arrive():
+    pass
+
+
+@instr("// placeholder await")
+def placeholder_await():
+    pass
+
+
 def schedule_Sm90a_gemm():
     unsafe = False
     enable_split_k = False
@@ -56,50 +66,50 @@ def schedule_Sm90a_gemm():
     gemm = simplify(gemm)  # Get rid of enable_split_k if stmts.
 
     # Extract cursors to initial proc.
-    loop_batch = gemm.find_loop("batch")
-    loop_task_k = gemm.find_loop("task_k")
-    loop_m = gemm.find_loop("m")
-    loop_n = gemm.find_loop("n")
-    loop_k = gemm.find_loop("k")
+    batch_loop = gemm.find_loop("batch")
+    task_k_loop = gemm.find_loop("task_k")
+    m_loop = gemm.find_loop("m")
+    n_loop = gemm.find_loop("n")
+    k_loop = gemm.find_loop("k")
     D_rmem = gemm.find_alloc_or_arg("D_rmem")
     D_zero = gemm.find("D_rmem = 0")
     if enable_split_k:
         C_assign = gemm.find("_ += D_rmem")
     else:
         C_assign = gemm.find("_ = D_rmem")
-    gap_before_main = loop_k.before()
-    gap_after_main = loop_k.after()
+    gap_before_main = k_loop.before()
+    gap_after_main = k_loop.after()
 
     # Set up cuda_tasks loops.
-    gemm = set_loop_mode(gemm, loop_batch, CudaTasks)
-    gemm = set_loop_mode(gemm, loop_task_k, CudaTasks)
-    gemm = divide_loop(gemm, loop_m, cluster_M, ("task_m", "sub_task_m"), tail="guard")
-    loop_task_m = gemm.forward(loop_m)
-    loop_sub_task_m = loop_task_m.body()[0]
-    gemm = set_loop_mode(gemm, loop_task_m, CudaTasks)
-    gemm = divide_loop(gemm, loop_n, cluster_N, ("task_n", "sub_task_n"), tail="guard")
-    loop_task_n = gemm.forward(loop_n)
-    loop_sub_task_n = loop_task_n.body()[0]
-    gemm = set_loop_mode(gemm, loop_task_n, CudaTasks)
+    gemm = set_loop_mode(gemm, batch_loop, CudaTasks)
+    gemm = set_loop_mode(gemm, task_k_loop, CudaTasks)
+    gemm = divide_loop(gemm, m_loop, cluster_M, ("task_m", "sub_task_m"), tail="guard")
+    task_m_loop = gemm.forward(m_loop)
+    sub_task_m_loop = task_m_loop.body()[0]
+    gemm = set_loop_mode(gemm, task_m_loop, CudaTasks)
+    gemm = divide_loop(gemm, n_loop, cluster_N, ("task_n", "sub_task_n"), tail="guard")
+    task_n_loop = gemm.forward(n_loop)
+    sub_task_n_loop = task_n_loop.body()[0]
+    gemm = set_loop_mode(gemm, task_n_loop, CudaTasks)
 
     # Move task_n loop to be the outer most loop.
-    gemm = lift_scope(gemm, loop_task_n)
-    gemm = lift_scope(gemm, loop_task_n)
-    gemm = lift_scope(gemm, loop_task_n)
+    gemm = lift_scope(gemm, task_n_loop)
+    gemm = lift_scope(gemm, task_n_loop)
+    gemm = lift_scope(gemm, task_n_loop)
 
     # Generate CTA loops.
     # These are supposed to be perfect, because the inner loop from the
     # task_m/task_n have constant bounds cluster_M, cluster_N.
-    gemm = divide_loop(gemm, loop_sub_task_m, smem_M, ("cta_m", "sub_cta_m"), perfect=True)
-    loop_cta_m = gemm.forward(loop_sub_task_m)
-    gemm = set_loop_mode(gemm, loop_cta_m, CudaThreads(unit=ncta_N * cuda_cta_in_cluster))
-    gemm = divide_loop(gemm, loop_sub_task_n, smem_N, ("cta_n", "sub_cta_n"), perfect=True)
-    loop_cta_n = gemm.forward(loop_sub_task_n)
-    gemm = set_loop_mode(gemm, loop_cta_n, CudaThreads(unit=cuda_cta_in_cluster))
+    gemm = divide_loop(gemm, sub_task_m_loop, smem_M, ("cta_m", "sub_cta_m"), perfect=True)
+    cta_m_loop = gemm.forward(sub_task_m_loop)
+    gemm = set_loop_mode(gemm, cta_m_loop, CudaThreads(unit=ncta_N * cuda_cta_in_cluster))
+    gemm = divide_loop(gemm, sub_task_n_loop, smem_N, ("cta_n", "sub_cta_n"), perfect=True)
+    n_cta_loop = gemm.forward(sub_task_n_loop)
+    gemm = set_loop_mode(gemm, n_cta_loop, CudaThreads(unit=cuda_cta_in_cluster))
 
     # Move cta_n loop outside for/if to be just under cta_m loop.
-    gemm = lift_scope(gemm, loop_cta_n)
-    gemm = lift_scope(gemm, loop_cta_n)
+    gemm = lift_scope(gemm, n_cta_loop)
+    gemm = lift_scope(gemm, n_cta_loop)
 
     # expand dim of D_rmem so each iteration uses its own D_rmem.
     # This enables future parallelization.
@@ -118,11 +128,11 @@ def schedule_Sm90a_gemm():
     # Non-perfect K loop:
     # This is harder than for M/N, since we have to think about how
     # zero padding makes the extra K loads safe (D += 0 is no-op).
-    gemm = divide_loop(gemm, loop_k, smem_K, ("iter_k", "sub_iter_k"), tail="guard")
-    loop_iter_k = gemm.forward(loop_k)
-    loop_sub_iter_k = loop_iter_k.body()[0]
+    gemm = divide_loop(gemm, k_loop, smem_K, ("iter_k", "sub_iter_k"), tail="guard")
+    iter_k_loop = gemm.forward(k_loop)
+    sub_iter_k_loop = iter_k_loop.body()[0]
     k_lifts = 0
-    parent = loop_iter_k.parent()
+    parent = iter_k_loop.parent()
     while True:
         if isinstance(parent, ForCursor):
             if isinstance(parent.loop_mode(), CudaTasks):
@@ -133,18 +143,18 @@ def schedule_Sm90a_gemm():
     gemm = fission(gemm, gap_before_main, n_lifts=k_lifts, unsafe_disable_checks=unsafe)
     gemm = fission(gemm, gap_after_main, n_lifts=k_lifts, unsafe_disable_checks=unsafe)
     for i in range(k_lifts):
-        gemm = lift_scope(gemm, loop_iter_k)
+        gemm = lift_scope(gemm, iter_k_loop)
     gap_before_main = gemm.forward(gap_before_main)
     gap_after_main = gemm.forward(gap_after_main)
     D_rmem = gemm.forward(D_rmem)
-    loop_iter_k = gemm.forward(loop_iter_k)
+    iter_k_loop = gemm.forward(iter_k_loop)
 
     # Stage A_smem, B_smem tiles above sub_cta_m loop.
     # TODO how to get a more stable reference to the input cursor.
     # We can't rely on the old sub_cta_m cursor since it's forwarded to
     # the wrong loop after fission.
     # TODO sucky that we have to use f-strings here; PAST can't get local variables???
-    sub_cta_m_main_loop = loop_iter_k.body()[0].body()[0].body()[0]
+    sub_cta_m_main_loop = iter_k_loop.body()[0].body()[0].body()[0]
     gemm = stage_mem(gemm, sub_cta_m_main_loop,
         f"A[batch, "
         f"(task_m * {ncta_M} + cta_m) * {smem_M} : (task_m * {ncta_M} + cta_m + 1) * {smem_M}, "
@@ -218,6 +228,12 @@ def schedule_Sm90a_gemm():
     # Substitute cuda memset for 0-init.
     if enable_split_k:
         gemm = replace(gemm, gemm.find_loop("memset_batch"), cudaMemsetAsync0_3f32())
+
+    # Specialize initial iteration of iter_k loop.
+    # NB this doubles the size of the proc ... you can eliminate this
+    # temporarily to make things easier to read.
+    if True:
+        gemm = cut_loop(gemm, iter_k_loop, 1)
 
     gemm = simplify(gemm)
     print(gemm)
