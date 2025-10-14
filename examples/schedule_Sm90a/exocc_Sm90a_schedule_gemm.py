@@ -1,6 +1,7 @@
 from __future__ import annotations
 from exo import *
 from exo.stdlib.scheduling import *
+from exo.stdlib.stdlib import auto_stage_mem
 from exo.platforms.cuda import *
 from exo.platforms.Sm80 import *
 from exo.platforms.Sm90 import *
@@ -15,8 +16,8 @@ def schedule_Sm90a_gemm():
     smem_M = 256
     smem_N = 64 * 3
     smem_K = 32
-    ncta_M = 1  # TODO implement
-    ncta_N = 1  # TODO implement
+    ncta_M = 2
+    ncta_N = 2
 
     # Derived constants
     wg_M = smem_M // 2
@@ -31,9 +32,8 @@ def schedule_Sm90a_gemm():
             B: f32[L, N, K_splits, K_cluster],  # Column-major (K-major)
             C: f32[L, N, M],  # Column-major
     ):
-        assert M % cluster_M == 0
-        assert N % cluster_N == 0
-        assert K_cluster % smem_K == 0
+        # assert K_cluster % K_smem == 0
+        assert K_cluster % 4 == 0
         if enable_split_k:
             for memset_batch in seq(0, L):
                 for memset_n in seq(0, N):
@@ -87,10 +87,8 @@ def schedule_Sm90a_gemm():
     # task_m/task_n have constant bounds cluster_M, cluster_N.
     gemm = divide_loop(gemm, loop_sub_task_m, smem_M, ("cta_m", "sub_cta_m"), perfect=True)
     loop_cta_m = gemm.forward(loop_sub_task_m)
-    loop_sub_cta_m = loop_cta_m.body()[0]
     gemm = divide_loop(gemm, loop_sub_task_n, smem_N, ("cta_n", "sub_cta_n"), perfect=True)
     loop_cta_n = gemm.forward(loop_sub_task_n)
-    loop_sub_cta_n = loop_cta_n.body()[0]
 
     # Move cta_n loop outside for/if to be just under cta_m loop.
     gemm = lift_scope(gemm, loop_cta_n)
@@ -107,33 +105,64 @@ def schedule_Sm90a_gemm():
     # Set up the main loop.
     # First we have to lift D_rmem out, then fission out the
     # zero prologue and GMEM-write epilogue.
-    # Divide K loop to yield main loop (k_iter)
-    # Move k_iter loop to be just under the tasks loops.
+    # Divide K loop to yield main loop (iter_k)
+    # Move iter_k loop to be just under the tasks loops.
     #
-    # TODO allow non-perfect.
+    # Non-perfect K loop:
     # This is harder than for M/N, since we have to think about how
     # zero padding makes the extra K loads safe (D += 0 is no-op).
-    gemm = divide_loop(gemm, loop_k, smem_K, ("k_iter", "k_sub_iter"), perfect=True)
-    loop_k_iter = gemm.forward(loop_k)
-    loop_k_sub_iter = loop_k_iter.body()[0]
+    gemm = divide_loop(gemm, loop_k, smem_K, ("iter_k", "sub_iter_k"), tail="guard")
+    loop_iter_k = gemm.forward(loop_k)
+    loop_sub_iter_k = loop_iter_k.body()[0]
     k_lifts = 0
-    parent = loop_k_iter.parent()
+    parent = loop_iter_k.parent()
     while True:
         if isinstance(parent, ForCursor):
             if parent.name() in ("task_m", "task_n"):
                 break
         k_lifts += 1
         parent = parent.parent()
-    for i in range(k_lifts):
-        gemm = lift_alloc(gemm, D_rmem)
+    gemm = lift_alloc(gemm, D_rmem, n_lifts=k_lifts)
     gemm = fission(gemm, gap_before_main, n_lifts=k_lifts, unsafe_disable_checks=unsafe)
     gemm = fission(gemm, gap_after_main, n_lifts=k_lifts, unsafe_disable_checks=unsafe)
     for i in range(k_lifts):
-        gemm = lift_scope(gemm, loop_k_iter)
+        gemm = lift_scope(gemm, loop_iter_k)
     gap_before_main = gemm.forward(gap_before_main)
     gap_after_main = gemm.forward(gap_after_main)
     D_rmem = gemm.forward(D_rmem)
-    loop_k_iter = gemm.forward(loop_k_iter)
+    loop_iter_k = gemm.forward(loop_iter_k)
+
+    # Stage A_smem, B_smem tiles above sub_cta_m loop.
+    # TODO how to get a more stable reference to the input cursor.
+    # We can't rely on the old sub_cta_m cursor since it's forwarded to
+    # the wrong loop after fission.
+    # TODO sucky that we have to use f-strings here; PAST can't get local variables???
+    sub_cta_m_main_loop = loop_iter_k.body()[0].body()[0].body()[0]
+    gemm = stage_mem(gemm, sub_cta_m_main_loop,
+        f"A[batch, "
+        f"(task_m * {ncta_M} + cta_m) * {smem_M} : (task_m * {ncta_M} + cta_m + 1) * {smem_M}, "
+        f"task_k, iter_k * {smem_K}: (iter_k + 1) * {smem_K}]",
+        "A_smem")
+    gemm = stage_mem(gemm, sub_cta_m_main_loop,
+        f"B[batch, "
+        f"(task_n * {ncta_N} + cta_n) * {smem_N} : (task_n * {ncta_N} + cta_n + 1) * {smem_N}, "
+        f"task_k, iter_k * {smem_K}: (iter_k + 1) * {smem_K}]",
+        "B_smem")
+    A_smem = gemm.find_alloc_or_arg("A_smem")
+    B_smem = gemm.find_alloc_or_arg("B_smem")
+
+    # Lift SMEM tiles to cluster scope.
+    # Generate one shard per CTA in cluster.
+    # Divide M/N dimension by 8.
+    gemm = simplify(gemm)  # stage_mem generates exprs too hard for Exo to understand...
+    for smem_cursor in (A_smem, B_smem):
+        gemm = divide_dim(gemm, smem_cursor, 0, 8)
+        gemm = expand_dim(gemm, smem_cursor, ncta_N, "cta_n")
+        gemm = expand_dim(gemm, smem_cursor, ncta_M, "cta_m")
+        gemm = lift_alloc(gemm, smem_cursor, n_lifts=3)
+
+    # M-warpgroup loop
+    gemm = divide_loop(gemm, sub_cta_m_main_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
 
     # Finalize zero prologue. TODO set cuda_threads loop, CudaWarps.
     D_zero = gemm.forward(D_zero)
@@ -145,7 +174,6 @@ def schedule_Sm90a_gemm():
         gemm = replace(gemm, sub_wg_m_loop, Sm90_zero_scale_d_f32(M=wg_M, N=wg_N))
 
     # Finalize write-to-C epilogue.
-    # Can't do this yet due to if guards inside the instr.
     if enable_split_k:
         assert 0
     else:
@@ -158,6 +186,8 @@ def schedule_Sm90a_gemm():
     # Substitute cuda memset for 0-init.
     if enable_split_k:
         gemm = replace(gemm, gemm.find_loop("memset_batch"), cudaMemsetAsync0_3f32())
+
+    gemm = simplify(gemm)
     print(gemm)
     return gemm
 
