@@ -70,12 +70,17 @@ def schedule_Sm90a_gemm():
     gap_before_main = loop_k.before()
     gap_after_main = loop_k.after()
 
+    # Set up cuda_tasks loops.
+    gemm = set_loop_mode(gemm, loop_batch, CudaTasks)
+    gemm = set_loop_mode(gemm, loop_task_k, CudaTasks)
     gemm = divide_loop(gemm, loop_m, cluster_M, ("task_m", "sub_task_m"), tail="guard")
     loop_task_m = gemm.forward(loop_m)
     loop_sub_task_m = loop_task_m.body()[0]
+    gemm = set_loop_mode(gemm, loop_task_m, CudaTasks)
     gemm = divide_loop(gemm, loop_n, cluster_N, ("task_n", "sub_task_n"), tail="guard")
     loop_task_n = gemm.forward(loop_n)
     loop_sub_task_n = loop_task_n.body()[0]
+    gemm = set_loop_mode(gemm, loop_task_n, CudaTasks)
 
     # Move task_n loop to be the outer most loop.
     gemm = lift_scope(gemm, loop_task_n)
@@ -87,8 +92,10 @@ def schedule_Sm90a_gemm():
     # task_m/task_n have constant bounds cluster_M, cluster_N.
     gemm = divide_loop(gemm, loop_sub_task_m, smem_M, ("cta_m", "sub_cta_m"), perfect=True)
     loop_cta_m = gemm.forward(loop_sub_task_m)
+    gemm = set_loop_mode(gemm, loop_cta_m, CudaThreads(unit=ncta_N * cuda_cta_in_cluster))
     gemm = divide_loop(gemm, loop_sub_task_n, smem_N, ("cta_n", "sub_cta_n"), perfect=True)
     loop_cta_n = gemm.forward(loop_sub_task_n)
+    gemm = set_loop_mode(gemm, loop_cta_n, CudaThreads(unit=cuda_cta_in_cluster))
 
     # Move cta_n loop outside for/if to be just under cta_m loop.
     gemm = lift_scope(gemm, loop_cta_n)
@@ -118,7 +125,7 @@ def schedule_Sm90a_gemm():
     parent = loop_iter_k.parent()
     while True:
         if isinstance(parent, ForCursor):
-            if parent.name() in ("task_m", "task_n"):
+            if isinstance(parent.loop_mode(), CudaTasks):
                 break
         k_lifts += 1
         parent = parent.parent()
@@ -161,13 +168,37 @@ def schedule_Sm90a_gemm():
         gemm = expand_dim(gemm, smem_cursor, ncta_M, "cta_m")
         gemm = lift_alloc(gemm, smem_cursor, n_lifts=3)
 
-    # M-warpgroup loop
+    # Fission CTA loops before and after B_smem load.
+    # TODO how to get these cursors more elegantly?
+    sub_cta_m_main_loop = gemm.forward(sub_cta_m_main_loop)
+    B_smem_loop = sub_cta_m_main_loop.prev()
+    gemm = fission(gemm, B_smem_loop.before(), n_lifts=2, unsafe_disable_checks=unsafe)
+    gemm = fission(gemm, B_smem_loop.after(), n_lifts=2, unsafe_disable_checks=unsafe)
+
+    # We have to reorder the loops for the B_smem load to be cta_n, cta_m.
+    # This is needed for multicasting.
+    # CTAs with the same cta_m value will multicast the same tile of B @ GMEM.
+    # Therefore, to substitute the instruction later, we need to have cta_m inner.
+    # Unlike CPU Exo, transposing these parallel loops requires us to rewrite
+    # the unit, to still have the same assignment of loop iters to CTAs (manual for now).
+    B_smem_loop = gemm.forward(B_smem_loop)
+    B_smem_cta_n_loop = B_smem_loop.parent()
+    B_smem_cta_m_loop = B_smem_cta_n_loop.parent()
+    print(B_smem_cta_m_loop)
+    gemm = reorder_loops(gemm, B_smem_cta_m_loop)
+    gemm = update_loop_mode(gemm, B_smem_cta_n_loop, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N))
+    gemm = update_loop_mode(gemm, B_smem_cta_m_loop, unit=cuda_cta_in_cluster)
+
+    # M-warpgroup loop (children should be replaced with wgmma later)
     gemm = divide_loop(gemm, sub_cta_m_main_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
+    wg_m_main_loop = gemm.forward(sub_cta_m_main_loop)
+    gemm = set_loop_mode(gemm, wg_m_main_loop, CudaThreads(unit=cuda_warpgroup))
 
     # Finalize zero prologue. TODO set cuda_threads loop, CudaWarps.
     D_zero = gemm.forward(D_zero)
     zero_m_loop = D_zero.parent().parent().parent().parent()  # TODO better way?
     gemm = divide_loop(gemm, zero_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
+    gemm = set_loop_mode(gemm, zero_m_loop, CudaThreads(unit=cuda_warpgroup))
     sub_wg_m_loop = gemm.forward(zero_m_loop).body()[0]
     if False:
         # TODO can't unify due to guards
@@ -180,6 +211,7 @@ def schedule_Sm90a_gemm():
         C_assign = gemm.forward(C_assign)
         assign_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
         gemm = divide_loop(gemm, assign_m_loop, wg_M, ("wg_m", "sub_wg_m"), perfect=True)
+        gemm = set_loop_mode(gemm, assign_m_loop, CudaThreads(unit=cuda_warpgroup))
         sub_wg_m_loop = gemm.forward(assign_m_loop).body()[0]
         gemm = replace(gemm, sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
 
