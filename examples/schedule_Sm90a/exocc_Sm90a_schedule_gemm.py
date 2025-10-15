@@ -13,36 +13,6 @@ from template_symlink.Sm90a_gemm_pre_config import Sm90aGemmConfig
 cases = []
 
 
-@instr("// PLACEHOLDER_RAW_ARRIVE")
-def PLACEHOLDER_RAW_ARRIVE():
-    pass
-
-
-@instr("// PLACEHOLDER_RAW_AWAIT")
-def PLACEHOLDER_RAW_AWAIT():
-    pass
-
-
-@instr("// PLACEHOLDER_WAR_ARRIVE")
-def PLACEHOLDER_WAR_ARRIVE():
-    pass
-
-
-@instr("// PLACEHOLDER_WAR_AWAIT")
-def PLACEHOLDER_WAR_AWAIT():
-    pass
-
-
-@instr("// PLACEHOLDER_CG_ARRIVE")
-def PLACEHOLDER_CG_ARRIVE():
-    pass
-
-
-@instr("// PLACEHOLDER_CG_AWAIT")
-def PLACEHOLDER_CG_AWAIT():
-    pass
-
-
 def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     unsafe = False
     enable_split_k = config.enable_split_k
@@ -276,16 +246,16 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     # These are per-CTA statements.
     # We then need to fission them from the SMEM load code,
     # because the (inner) CTA loop for the SMEM load is part of the TMA instr.
-    gemm = insert_noop_call(gemm, A_smem_loop.before(), PLACEHOLDER_WAR_AWAIT, [])
+    gemm = insert_await(gemm, A_smem_loop.before(), "war[cta_m, cta_n]", cuda_temporal, ~(RING-1))
     gemm = fission(gemm, A_smem_loop.before(), n_lifts=1)
-    gemm = insert_noop_call(gemm, B_smem_loop.after(), PLACEHOLDER_RAW_ARRIVE, [])
+    gemm = insert_arrive(gemm, B_smem_loop.after(), cuda_temporal, ("raw[cta_m, :]", "raw[:, cta_n]"))
     gemm = fission(gemm, B_smem_loop.after(), n_lifts=1)
 
     # wgmma M-warpgroup loop (children should be replaced with wgmma later)
     # Surround with mbarrier await/arrive (TODO)
     wg_m_main_loop = gemm.forward(wg_m_main_loop)
-    gemm = insert_noop_call(gemm, wg_m_main_loop.before(), PLACEHOLDER_RAW_AWAIT, [])
-    gemm = insert_noop_call(gemm, wg_m_main_loop.after(), PLACEHOLDER_WAR_ARRIVE, [])
+    gemm = insert_await(gemm, wg_m_main_loop.before(), "raw[cta_m, cta_n]", cuda_generic_and_async_proxy, ~0)
+    gemm = insert_arrive(gemm, wg_m_main_loop.after(), cuda_in_order, ("war[cta_m, :]", "war[:, cta_n]"))
 
     # wgmma K loop needs to be tiled by 8.
     # Wrap these future wgmma instrs with wgmma.fence before, cg arrive after
@@ -304,7 +274,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     mma_k_loop = gemm.forward(mma_k_loop)
     wgmma_cursor = mma_k_loop.body()[0]
     gemm = insert_fence(gemm, mma_k_loop.before(), wgmma_fence_1, wgmma_fence_2)
-    gemm = insert_noop_call(gemm, mma_k_loop.after(), PLACEHOLDER_CG_ARRIVE, [])
+    gemm = insert_arrive(gemm, mma_k_loop.after(), wgmma_async, "cg[cta_m, cta_n, wg_m]")
     # TODO after arrive, we need:
     # if k_iter >= 1:
     #     Await(cg[cta_m,cta_n,wg], cuda_in_order, 1)
@@ -332,7 +302,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     C_assign = gemm.forward(C_assign)
     assign_sub_wg_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
     assign_wg_m_loop = assign_sub_wg_m_loop.parent()
-    gemm = insert_noop_call(gemm, assign_wg_m_loop.body().before(), PLACEHOLDER_CG_AWAIT, [])
+    gemm = insert_await(gemm, assign_wg_m_loop.body().before(), "cg[cta_m, cta_n, wg_m]", cuda_in_order, 0)
     gemm = wrap_with_context(gemm, assign_wg_m_loop, CudaWarps(name="consumer"))
     assign_wg_m_loop = gemm.forward(assign_wg_m_loop)
     # TODO: is there a better way to set n_lifts?
