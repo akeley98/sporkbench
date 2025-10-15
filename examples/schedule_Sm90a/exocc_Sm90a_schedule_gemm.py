@@ -7,6 +7,9 @@ from exo.platforms.Sm80 import *
 from exo.platforms.Sm90 import *
 
 
+from template_symlink.Sm90a_gemm_pre_config import Sm90aGemmConfig
+
+
 cases = []
 
 
@@ -40,14 +43,13 @@ def PLACEHOLDER_CG_AWAIT():
     pass
 
 
-def schedule_Sm90a_gemm():
+def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     unsafe = False
-    enable_split_k = False
-    smem_M = 256
-    smem_N = 64 * 3
+    enable_split_k = config.enable_split_k
+    smem_M = config.smem_M
+    smem_N = config.smem_N
     smem_K = 32
-    ncta_M = 2
-    ncta_N = 2
+    RING = config.RING
 
     # Derived constants
     wg_M = smem_M // 2
@@ -66,35 +68,51 @@ def schedule_Sm90a_gemm():
         warp_config=my_warp_config
     )
 
+    # TMA SMEM box sizes.
+    # (batch dim, MN smem, k_task, K smem)
+    smem_box_A = (1, smem_M // ncta_N, 1, smem_K)
+    smem_box_B = (1, smem_N // ncta_M, 1, smem_K)  # ncta_M is not a typo
+    # (batch dim, N smem, M smem)
+    smem_box_C = (1, smem_N, smem_M)
+
     @proc
     def gemm(
-            L: size, M: size, N: size, K_splits: size, K_cluster: size,
-            A: f32[L, M, K_splits, K_cluster] @ CudaGmemLinear,  # Row-major (K-major)
-            B: f32[L, N, K_splits, K_cluster] @ CudaGmemLinear,  # Column-major (K-major)
+            L: size, M: size, N: size, K_split: size, cluster_K: size,
+            A: f32[L, M, K_split, cluster_K] @ CudaGmemLinear,  # Row-major (K-major)
+            B: f32[L, N, K_split, cluster_K] @ CudaGmemLinear,  # Column-major (K-major)
             C: f32[L, N, M] @ CudaGmemLinear,  # Column-major
     ):
-        # assert K_cluster % K_smem == 0
-        assert K_cluster % 4 == 0
+        assert L > 0
+        assert M > 0
+        assert N > 0
+        assert cluster_K > 0
+        assert cluster_K % 4 == 0
         if enable_split_k:
             for memset_batch in seq(0, L):
                 for memset_n in seq(0, N):
                     for memset_m in seq(0, M):
                         C[memset_batch, memset_n, memset_m] = 0
 
+        A_tensorMap = A[:,:,:,:] @ Sm90_tensorMap(128, *smem_box_A)
+        B_tensorMap = B[:,:,:,:] @ Sm90_tensorMap(128, *smem_box_B)
+        C_tensorMap = C[:,:,:] @ Sm90_tensorMap(0, *smem_box_C)  # Only for enable_split_k=True
+
         for batch in seq(0, L):
-            for task_k in seq(0, K_splits):
+            for task_k in seq(0, K_split):
                 for m in seq(0, M):
                     for n in seq(0, N):
                         D_rmem: f32
                         D_rmem = 0
-                        for k in seq(0, K_cluster):
-                            D_rmem += A[batch, m, task_k, k] * B[batch, n, task_k, k]
+                        for k in seq(0, cluster_K):
+                            D_rmem += A_tensorMap[batch, m, task_k, k] * B_tensorMap[batch, n, task_k, k]
                         if enable_split_k:
-                            C[batch, n, m] += D_rmem
+                            C_tensorMap[batch, n, m] += D_rmem
                         else:
                             C[batch, n, m] = D_rmem
 
     gemm = simplify(gemm)  # Get rid of enable_split_k if stmts.
+    if not enable_split_k:
+        gemm = inline_window(gemm, "C_tensorMap = _")
 
     # Extract cursors to initial proc.
     batch_loop = gemm.find_loop("batch")
@@ -152,11 +170,13 @@ def schedule_Sm90a_gemm():
 
     # expand dim of D_rmem so each iteration uses its own D_rmem.
     # This enables future parallelization.
+    # Set the memory type for wgmma accumulators.
     gemm = expand_dim(gemm, D_rmem, smem_N, "sub_cta_n")
     gemm = expand_dim(gemm, D_rmem, wg_M, "sub_wg_m")
     gemm = expand_dim(gemm, D_rmem, 2, "wg_m")
     gemm = expand_dim(gemm, D_rmem, ncta_N, "cta_n")
     gemm = expand_dim(gemm, D_rmem, ncta_M, "cta_m")
+    gemm = set_memory(gemm, D_rmem, Sm90_RmemMatrixD(wg_M, smem_N))
     D_rmem = gemm.forward(D_rmem)
 
     # Set up the main loop.
@@ -189,31 +209,38 @@ def schedule_Sm90a_gemm():
     D_rmem = gemm.forward(D_rmem)
     iter_k_loop = gemm.forward(iter_k_loop)
 
-    # Stage A_smem, B_smem tiles above wg_m loop.
+    # Stage A_smem, B_smem tiles above wg_m loop in swizzled memory.
     # TODO how to get a more stable reference to the input cursor.
     # We can't rely on the old cursor since it's forwarded to
     # the wrong loop after fission.
     # TODO sucky that we have to use f-strings here; PAST can't get local variables???
     wg_m_main_loop = iter_k_loop.body()[0].body()[0].body()[0]
     gemm = stage_mem(gemm, wg_m_main_loop,
-        f"A[batch, "
+        f"A_tensorMap[batch, "
         f"(task_m * {ncta_M} + cta_m) * {smem_M} : (task_m * {ncta_M} + cta_m + 1) * {smem_M}, "
         f"task_k, iter_k * {smem_K}: (iter_k + 1) * {smem_K}]",
-        "A_smem")
+        "A_smem",
+        False,
+        Sm90_SmemSwizzled(128),
+    )
     gemm = stage_mem(gemm, wg_m_main_loop,
-        f"B[batch, "
+        f"B_tensorMap[batch, "
         f"(task_n * {ncta_N} + cta_n) * {smem_N} : (task_n * {ncta_N} + cta_n + 1) * {smem_N}, "
         f"task_k, iter_k * {smem_K}: (iter_k + 1) * {smem_K}]",
-        "B_smem")
+        "B_smem",
+        False,
+        Sm90_SmemSwizzled(128),
+    )
     A_smem = gemm.find_alloc_or_arg("A_smem")
     B_smem = gemm.find_alloc_or_arg("B_smem")
 
-    # Lift SMEM tiles to cluster scope.
+    # Lift SMEM tiles to cluster scope, with ring buffering (based on iter_k).
     # Generate one shard per CTA in cluster.
     # Divide M/N dimension by 8.
     gemm = simplify(gemm)  # stage_mem generates exprs too hard for Exo to understand...
     for smem_cursor in (A_smem, B_smem):
         gemm = divide_dim(gemm, smem_cursor, 0, 8)
+        gemm = expand_dim(gemm, smem_cursor, RING, f"iter_k % {RING}")
         gemm = expand_dim(gemm, smem_cursor, ncta_N, "cta_n")
         gemm = expand_dim(gemm, smem_cursor, ncta_M, "cta_m")
         gemm = lift_alloc(gemm, smem_cursor, n_lifts=3)
@@ -324,7 +351,7 @@ def schedule_Sm90a_gemm():
     # Specialize initial iteration of iter_k loop.
     # NB this doubles the size of the proc ... you can eliminate this
     # temporarily to make things easier to read.
-    if False:
+    if True:
         gemm = cut_loop(gemm, iter_k_loop, 1)
 
     gemm = simplify(gemm)
@@ -332,16 +359,26 @@ def schedule_Sm90a_gemm():
     return gemm
 
 
-foo = schedule_Sm90a_gemm()
-del foo
+from template_symlink.make_Sm90a_gemm import make_Sm90a_gemm
+import os
+thisdir = os.path.split(__file__)[0]
 
+config = Sm90aGemmConfig()
+config.smem_M = 128
+config.smem_N = 256
+config.tma_to_gmem = False
+config.enable_split_k = False
+ncta_M, ncta_N = 2, 2
 
-@proc
-def dummy_cuda():
-    with CudaDeviceFunction(blockDim=32):
-        for task in cuda_tasks(0, 1):
-            pass
+handwritten_gemm = make_Sm90a_gemm(config, ncta_M, ncta_N)
+handwritten_gemm = rename(handwritten_gemm, "handwritten_gemm")
+open(os.path.join(thisdir, "out_handwritten_gemm.py"), "w").write(str(handwritten_gemm))
 
+scheduled_gemm = schedule_Sm90a_gemm(config, ncta_M, ncta_N)
+scheduled_gemm = rename(scheduled_gemm, "scheduled_gemm")
+open(os.path.join(thisdir, "out_scheduled_gemm.py"), "w").write(str(scheduled_gemm))
 
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
+
+del scheduled_gemm
