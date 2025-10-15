@@ -71,9 +71,6 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
             for task_k in cuda_tasks(0, K_split):
               for task_n in cuda_tasks(0, (N + cluster_N - 1) / cluster_N):
                 for task_m in cuda_tasks(0, (M + cluster_M - 1) / cluster_M):
-                    raw : barrier[ncta_M, ncta_N] @ CudaMbarrier
-                    war : barrier(raw)[ncta_M, ncta_N] @ CudaMbarrier
-                    cg : barrier[ncta_M, ncta_N, 2] @ CudaCommitGroup
                     D_rmem : f32[ncta_M, ncta_N, 2, wg_M, wg_N] @ Sm90_RmemMatrixD(wg_M, wg_N)
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -81,6 +78,10 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                             with CudaWarps(name="consumer"):
                                 for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                     Sm90_zero_scale_d_f32(D_rmem[cta_m,cta_n,wg_m,:,:], M=wg_M, N=wg_N)
+
+                    raw : barrier[ncta_M, ncta_N] @ CudaMbarrier
+                    war : barrier(raw)[ncta_M, ncta_N] @ CudaMbarrier
+                    cg : barrier[ncta_M, ncta_N, 2] @ CudaCommitGroup
 
                     A_smem : f32[ncta_M, ncta_N, RING, smem_M / 8, 8, smem_K] @ Sm90_SmemSwizzled(128)
                     B_smem : f32[ncta_M, ncta_N, RING, smem_N / 8, 8, smem_K] @ Sm90_SmemSwizzled(128)

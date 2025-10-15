@@ -21,6 +21,9 @@ def scheduled_gemm(L : size, M : size, N : size, K_split : size, cluster_K : siz
                         for sub_cta_n in seq(0, 256):
                           if sub_cta_n + 256 * cta_n + 512 * task_n < N:
                             D_rmem[cta_m, cta_n, wg_m, sub_wg_m, sub_cta_n] = 0
+            raw : barrier[2, 2] @CudaMbarrier
+            war : barrier(raw)[2, 2] @CudaMbarrier
+            cg : barrier[2, 2, 2] @CudaCommitGroup
             A_smem : f32[2, 2, 4, 16, 8, 32] @Sm90_SmemSwizzled(128,)
             B_smem : f32[2, 2, 4, 32, 8, 32] @Sm90_SmemSwizzled(128,)
             for iter_k in seq(0, 1):
@@ -46,7 +49,7 @@ def scheduled_gemm(L : size, M : size, N : size, K_split : size, cluster_K : siz
                   for cta_n in cuda_threads(0, 2, unit=cuda_cta_in_cluster):
                     PLACEHOLDER_RAW_AWAIT()
                     for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
-                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_31576
+                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_30909
                       for mma_k in seq(0, 4):
                         for sub_wg_m in seq(0, 64):
                           if sub_wg_m + 64 * wg_m + 128 * cta_m + 256 * task_m < M:
@@ -80,7 +83,7 @@ def scheduled_gemm(L : size, M : size, N : size, K_split : size, cluster_K : siz
                   for cta_n in cuda_threads(0, 2, unit=cuda_cta_in_cluster):
                     PLACEHOLDER_RAW_AWAIT()
                     for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
-                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_33913
+                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_33256
                       for mma_k in seq(0, 4):
                         for sub_wg_m in seq(0, 64):
                           if sub_wg_m + 64 * wg_m + 128 * cta_m + 256 * task_m < M:
@@ -101,4 +104,4 @@ def scheduled_gemm(L : size, M : size, N : size, K_split : size, cluster_K : siz
                 with CudaWarps(name='consumer'):
                   for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                     Sm90_mma_store_d_col_major_tf32(-(256 * task_m) - 128 * cta_m - 64 * wg_m + M, -(512 * task_n) - 256 * cta_n + N, C[batch, 256 * cta_n + 512 * task_n:256 + 256 * cta_n + 512 * task_n, 64 * wg_m + 128 * cta_m + 256 * task_m:64 + 64 * wg_m + 128 * cta_m + 256 * task_m], D_rmem[cta_m, cta_n, wg_m, 0:64, 0:256], M=64, N=256)
-            Fence(cuda_in_order, cuda_in_order)  # Fence_33163
+            Fence(cuda_in_order, cuda_in_order)  # Fence_32496

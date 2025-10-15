@@ -11,15 +11,15 @@ def handwritten_gemm(L : size, M : size, N : size, K_split : size, cluster_K : s
       for task_k in cuda_tasks(0, K_split):
         for task_n in cuda_tasks(0, (511 + N) / 512):
           for task_m in cuda_tasks(0, (255 + M) / 256):
-            raw : barrier[2, 2] @CudaMbarrier
-            war : barrier(raw)[2, 2] @CudaMbarrier
-            cg : barrier[2, 2, 2] @CudaCommitGroup
             D_rmem : f32[2, 2, 2, 64, 256] @Sm90_RmemMatrixD(64, 256)
             for cta_m in cuda_threads(0, 2, unit=2 * cuda_cta_in_cluster):
               for cta_n in cuda_threads(0, 2, unit=cuda_cta_in_cluster):
                 with CudaWarps(name='consumer'):
                   for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                     Sm90_zero_scale_d_f32(D_rmem[cta_m, cta_n, wg_m, 0:64, 0:256], M=64, N=256)
+            raw : barrier[2, 2] @CudaMbarrier
+            war : barrier(raw)[2, 2] @CudaMbarrier
+            cg : barrier[2, 2, 2] @CudaCommitGroup
             A_smem : f32[2, 2, 4, 16, 8, 32] @Sm90_SmemSwizzled(128,)
             B_smem : f32[2, 2, 4, 32, 8, 32] @Sm90_SmemSwizzled(128,)
             for iter_k in seq(0, 1):
@@ -37,7 +37,7 @@ def handwritten_gemm(L : size, M : size, N : size, K_split : size, cluster_K : s
                   for cta_n in cuda_threads(0, 2, unit=cuda_cta_in_cluster):
                     Await(raw[cta_m, cta_n], cuda_generic_and_async_proxy, ~0)
                     for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
-                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_929
+                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_33307
                       for mma_k in seq(0, 4):
                         Sm90_mma_async_tf32(D_rmem[cta_m, cta_n, wg_m, 0:64, 0:256], A_smem[cta_m, cta_n, iter_k % 4, 8 * wg_m:8 + 8 * wg_m, 0:8, 8 * mma_k:8 + 8 * mma_k], B_smem[cta_m, cta_n, iter_k % 4, 0:32, 0:8, 8 * mma_k:8 + 8 * mma_k], M=64, N=256)
                       Arrive(wgmma_async, 1) >> cg[cta_m, cta_n, wg_m]
@@ -59,7 +59,7 @@ def handwritten_gemm(L : size, M : size, N : size, K_split : size, cluster_K : s
                   for cta_n in cuda_threads(0, 2, unit=cuda_cta_in_cluster):
                     Await(raw[cta_m, cta_n], cuda_generic_and_async_proxy, ~0)
                     for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
-                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_1530
+                      Fence(wgmma_fence_1, wgmma_fence_2)  # Fence_33898
                       for mma_k in seq(0, 4):
                         Sm90_mma_async_tf32(D_rmem[cta_m, cta_n, wg_m, 0:64, 0:256], A_smem[cta_m, cta_n, iter_k % 4, 8 * wg_m:8 + 8 * wg_m, 0:8, 8 * mma_k:8 + 8 * mma_k], B_smem[cta_m, cta_n, iter_k % 4, 0:32, 0:8, 8 * mma_k:8 + 8 * mma_k], M=64, N=256)
                       Arrive(wgmma_async, 1) >> cg[cta_m, cta_n, wg_m]

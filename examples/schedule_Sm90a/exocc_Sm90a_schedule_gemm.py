@@ -209,6 +209,11 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     D_rmem = gemm.forward(D_rmem)
     iter_k_loop = gemm.forward(iter_k_loop)
 
+    # Set up barrier objects for later use.
+    gemm = insert_barrier_alloc(gemm, iter_k_loop.before(), "raw", None, [ncta_M, ncta_N], CudaMbarrier)
+    gemm = insert_barrier_alloc(gemm, iter_k_loop.before(), "war", "raw", [ncta_M, ncta_N], CudaMbarrier)
+    gemm = insert_barrier_alloc(gemm, iter_k_loop.before(), "cg", None, [ncta_M, ncta_N, 2], CudaCommitGroup)
+
     # Stage A_smem, B_smem tiles above wg_m loop in swizzled memory.
     # TODO how to get a more stable reference to the input cursor.
     # We can't rely on the old cursor since it's forwarded to
@@ -355,7 +360,6 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
         gemm = cut_loop(gemm, iter_k_loop, 1)
 
     gemm = simplify(gemm)
-    print(gemm)
     return gemm
 
 
@@ -370,13 +374,13 @@ config.tma_to_gmem = False
 config.enable_split_k = False
 ncta_M, ncta_N = 2, 2
 
-handwritten_gemm = make_Sm90a_gemm(config, ncta_M, ncta_N)
-handwritten_gemm = rename(handwritten_gemm, "handwritten_gemm")
-open(os.path.join(thisdir, "out_handwritten_gemm.py"), "w").write(str(handwritten_gemm))
-
 scheduled_gemm = schedule_Sm90a_gemm(config, ncta_M, ncta_N)
 scheduled_gemm = rename(scheduled_gemm, "scheduled_gemm")
 open(os.path.join(thisdir, "out_scheduled_gemm.py"), "w").write(str(scheduled_gemm))
+
+handwritten_gemm = make_Sm90a_gemm(config, ncta_M, ncta_N)
+handwritten_gemm = rename(handwritten_gemm, "handwritten_gemm")
+open(os.path.join(thisdir, "out_handwritten_gemm.py"), "w").write(str(handwritten_gemm))
 
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
