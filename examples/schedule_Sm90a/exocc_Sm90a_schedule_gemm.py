@@ -309,15 +309,19 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = fission(gemm, assign_wg_m_loop.body()[0].after(), n_lifts=4)
     if enable_split_k:
         assert 0
+        # Insert cluster sync at the end.
+        inner_task_loop = gemm.forward(inner_task_loop)
+        gemm = insert_fence(gemm, inner_task_loop.body().after(), cuda_in_order, cuda_in_order)
     else:
-        pass
         gemm = replace(gemm, assign_sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
-
-    # Insert cluster sync at the end.
-    # For the non-split-k case, we can replace this with Arrive/Await
-    # surrounding the store_d loop.
-    inner_task_loop = gemm.forward(inner_task_loop)
-    gemm = insert_fence(gemm, inner_task_loop.body().after(), cuda_in_order, cuda_in_order)
+        # Surround store_d loop with cluster arrive/await
+        inner_task_loop = gemm.forward(inner_task_loop)
+        cluster_arrive_here = inner_task_loop.body().after().anchor().before()
+        gemm = insert_barrier_alloc(gemm, cluster_arrive_here, "cluster_sync", None, [], CudaClusterSync)
+        cluster_arrive_here = gemm.forward(cluster_arrive_here)
+        print(cluster_arrive_here)
+        gemm = insert_arrive(gemm, cluster_arrive_here, cuda_in_order, "cluster_sync")
+        gemm = insert_await(gemm, inner_task_loop.body().after(), "cluster_sync", cuda_in_order, 0)
 
     # Substitute cuda memset for 0-init.
     if enable_split_k:
