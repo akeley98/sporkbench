@@ -280,7 +280,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     # )
 
     # wgmma M-warpgroup loop (children should be replaced with wgmma later)
-    # Surround with mbarrier await/arrive (TODO)
+    # Surround with mbarrier await/arrive.
     wg_m_main_loop = gemm.forward(wg_m_main_loop)
     gemm = insert_await(gemm, wg_m_main_loop.before(), "raw[cta_m, cta_n]", cuda_generic_and_async_proxy, ~0)
     gemm = insert_arrive(gemm, wg_m_main_loop.after(), cuda_in_order, ("war[cta_m, :]", "war[:, cta_n]"))
@@ -304,10 +304,13 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = unsafe_remove_if(gemm, wgmma_cursor, True)
     # gemm = replace(gemm, wgmma_cursor, Sm90_mma_async_tf32(M=wg_M, N=smem_N))
     gemm = insert_fence(gemm, mma_k_loop.before(), wgmma_fence_1, wgmma_fence_2)
-    gemm = insert_arrive(gemm, mma_k_loop.after(), wgmma_async, "cg[cta_m, cta_n, wg_m]")
-    # TODO after arrive, we need:
+    # Arrive(wgmma_async, 1) >> cg[cta_m, cta_n, wg_m]
     # if k_iter >= 1:
-    #     Await(cg[cta_m,cta_n,wg], cuda_in_order, 1)
+    #     Await(cg[cta_m, cta_n, wg_m], cuda_in_order, 1)
+    gemm = insert_await(gemm, mma_k_loop.after(), "cg[cta_m, cta_n, wg_m]", cuda_in_order, 1)
+    mma_k_loop = gemm.forward(mma_k_loop)
+    gemm = add_if(gemm, mma_k_loop.next(), "iter_k >= 1", True)
+    gemm = insert_arrive(gemm, mma_k_loop.after(), wgmma_async, "cg[cta_m, cta_n, wg_m]")
 
     # Main loop warp specialization.
     # I think there's 3 statements at this level right now.
