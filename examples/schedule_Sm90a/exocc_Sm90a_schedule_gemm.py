@@ -251,6 +251,34 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = insert_arrive(gemm, B_smem_loop.after(), cuda_temporal, ("raw[cta_m, :]", "raw[:, cta_n]"))
     gemm = fission(gemm, B_smem_loop.after(), n_lifts=1)
 
+    # Substitute multicast TMA.
+    A_smem_loop = gemm.forward(A_smem_loop)
+    B_smem_loop = gemm.forward(B_smem_loop)
+    gemm = unsafe_remove_if(gemm, A_smem_loop, True)
+    # gemm = replace(
+    #     gemm,
+    #     A_smem_loop,
+    #     Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
+    #         ncta=ncta_N,
+    #         cta_stride=1,
+    #         size0=smem_M,
+    #         size1=smem_K,
+    #         smem_box=smem_box_A,
+    #     )
+    # )
+    gemm = unsafe_remove_if(gemm, B_smem_loop, True)
+    # gemm = replace(
+    #     gemm,
+    #     B_smem_loop,
+    #     Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
+    #         ncta=ncta_M,
+    #         cta_stride=ncta_N,
+    #         size0=smem_N,
+    #         size1=smem_K,
+    #         smem_box=smem_box_B,
+    #     )
+    # )
+
     # wgmma M-warpgroup loop (children should be replaced with wgmma later)
     # Surround with mbarrier await/arrive (TODO)
     wg_m_main_loop = gemm.forward(wg_m_main_loop)
@@ -273,6 +301,8 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
         gemm = lift_scope(gemm, mma_k_loop)
     mma_k_loop = gemm.forward(mma_k_loop)
     wgmma_cursor = mma_k_loop.body()[0]
+    gemm = unsafe_remove_if(gemm, wgmma_cursor, True)
+    # gemm = replace(gemm, wgmma_cursor, Sm90_mma_async_tf32(M=wg_M, N=smem_N))
     gemm = insert_fence(gemm, mma_k_loop.before(), wgmma_fence_1, wgmma_fence_2)
     gemm = insert_arrive(gemm, mma_k_loop.after(), wgmma_async, "cg[cta_m, cta_n, wg_m]")
     # TODO after arrive, we need:
@@ -288,13 +318,13 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = wrap_with_context(gemm, iter_k_loop.body()[2], CudaWarps(name="consumer"))
 
     # Finalize zero prologue.
+    # We have to unsafely remove the if-guards to substitute the zero instr.
     D_zero = gemm.forward(D_zero)
     zero_m_loop = D_zero.parent().parent().parent().parent().parent()  # TODO better way?
     gemm = wrap_with_context(gemm, zero_m_loop, CudaWarps(name="consumer"))
     sub_wg_m_loop = gemm.forward(zero_m_loop).body()[0]
-    if False:
-        # TODO can't unify due to guards
-        gemm = replace(gemm, sub_wg_m_loop, Sm90_zero_scale_d_f32(M=wg_M, N=wg_N))
+    gemm = unsafe_remove_if(gemm, sub_wg_m_loop, True)
+    gemm = replace(gemm, sub_wg_m_loop, Sm90_zero_scale_d_f32(M=wg_M, N=wg_N))
 
     # Finalize write-to-C epilogue.
     # Need to wait for wgmma beforehand.
