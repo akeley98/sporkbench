@@ -69,6 +69,10 @@ for dname, _, fnames in os.walk(runner_src_dir):
             print(f"\x1b[1m\x1b[34mrunner:\x1b[0m {full_path}")
 
 
+# "temporary"
+cutlass_include_dir = os.path.join(sporkbench_dir, "../cutlass/include")
+
+
 @dataclass(slots=True)
 class ExoccSource:
     rel_dir: str
@@ -108,7 +112,7 @@ nvcc_bin = {Qarg(nvcc)}
 cxx = {Qarg(cxx)}
 exocc = {Qarg(exocc)}
 python3 = {Qarg(python3)}
-nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ $
+nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
     --expt-extended-lambda --expt-relaxed-constexpr
 

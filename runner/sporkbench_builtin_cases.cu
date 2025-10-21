@@ -4,6 +4,8 @@
 #include <cublas_v2.h>
 #include <stdio.h>
 
+#include "sporkbench_cutlass_Sm80.hpp"
+
 namespace sporkbench {
 
 #define CUBLAS_CHECK(x) if (auto _cublas_status = x; _cublas_status != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "%s:%i cublas status %i\n", __FILE__, __LINE__, (int)_cublas_status); }
@@ -64,6 +66,7 @@ const GemmCase GemmCase::builtin_cases[] = {
     1, 1,  // K_split: set to 1, so we don't sweep this parameter.
     1, INT32_MAX,  // K_cluster
   },
+  cutlass_Sm80_GemmCase,
 };
 
 const int GemmCase::num_builtin_cases = sizeof(GemmCase::builtin_cases) / sizeof(GemmCase::builtin_cases[0]);

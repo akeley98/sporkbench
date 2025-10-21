@@ -3,6 +3,8 @@
 Compiles your Exo-GPU kernels and compares them to cublas.
 We require the `ninja` build tool (Ubuntu package `ninja-build`), `exocc`, and `nvcc` 12.3+.
 
+TEMPORARY: we require `cutlass` cloned as a directory next to `sporkbench` (this directory); we should make this optional later.
+
 **Compile Exo:** `./sporkbench.py [source directory]` (e.g. `examples/Sm90a_gemm`)
 
 **Run CUDA:** `[source directory]/bin/sporkbench/run_sporkbench [data.json]`
