@@ -124,6 +124,9 @@ rule nvcc_Sm90a
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a $in -o $out -MD -MF $out.d
   depfile = $out.d
 
+rule nvcc_Sm80_keep
+  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d -keep
+
 rule link
   command = $nvcc_bin $nvcc_args $in -o $out -lcuda -lcublas
 """)
@@ -161,7 +164,7 @@ for i, src_info in enumerate(exocc_sources):
 # Write CUDA -> .o builds for the runner itself.
 build.write("\n")
 for src_info in runner_sources:
-    build.write(f"build {Qpath(src_info.o)}: nvcc_Sm80 {Qpath(src_info.cu)}\n")
+    build.write(f"build {Qpath(src_info.o)}: nvcc_Sm80_keep {Qpath(src_info.cu)}\n")
 
 
 # Write JSON-to-C build
