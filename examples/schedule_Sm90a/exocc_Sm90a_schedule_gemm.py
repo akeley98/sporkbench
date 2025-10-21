@@ -257,7 +257,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = unsafe_remove_if(gemm, A_smem_loop, True)
     # gemm = replace(
     #     gemm,
-    #     A_smem_loop,
+    #     A_smem_loop.parent(),  # CTA loop (for multicast) is parent
     #     Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
     #         ncta=ncta_N,
     #         cta_stride=1,
@@ -269,7 +269,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = unsafe_remove_if(gemm, B_smem_loop, True)
     # gemm = replace(
     #     gemm,
-    #     B_smem_loop,
+    #     B_smem_loop.parent(),  # CTA loop (for multicast) is parent
     #     Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
     #         ncta=ncta_M,
     #         cta_stride=ncta_N,
@@ -388,6 +388,14 @@ open(os.path.join(thisdir, "out_scheduled_gemm.py"), "w").write(str(scheduled_ge
 handwritten_gemm = make_Sm90a_gemm(config, ncta_M, ncta_N)
 handwritten_gemm = rename(handwritten_gemm, "handwritten_gemm")
 open(os.path.join(thisdir, "out_handwritten_gemm.py"), "w").write(str(handwritten_gemm))
+
+cases.append({
+    "algorithm": "gemm",
+    "proc": "handwritten_gemm",
+    "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
+    "K_split_max": 1,
+    "A_major": "row", "B_major": "col", "C_major": "col",
+})
 
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
