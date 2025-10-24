@@ -83,8 +83,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                     war : barrier(raw)[ncta_M, ncta_N] @ CudaMbarrier
                     cg : barrier[ncta_M, ncta_N, 2] @ CudaCommitGroup
 
-                    A_smem : f32[ncta_M, ncta_N, RING, smem_M / 8, 8, smem_K] @ Sm90_SmemSwizzled(128)
-                    B_smem : f32[ncta_M, ncta_N, RING, smem_N / 8, 8, smem_K] @ Sm90_SmemSwizzled(128)
+                    A_smem : f32[ncta_M, ncta_N, RING, smem_M, smem_K] @ Sm90_SmemSwizzled(128)
+                    B_smem : f32[ncta_M, ncta_N, RING, smem_N, smem_K] @ Sm90_SmemSwizzled(128)
 
                     # This loop should be cut at 1
                     for iter_k in seq(0, (cluster_K + smem_K - 1) / smem_K):
@@ -94,7 +94,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
                                     Await(war[cta_m,cta_n], cuda_temporal, ~(RING-1))
                                 Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
-                                    A_smem[cta_m,:,iter_k % RING,:,:,:],
+                                    A_smem[cta_m,:,iter_k % RING,:,:],
                                     A_tensorMap[
                                         batch,
                                         (ncta_M*task_m + cta_m) * smem_M:
@@ -106,7 +106,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                 ) >> raw[cta_m,:]
                             for cta_n in cuda_threads(0, ncta_N, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N)):
                                 Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
-                                    B_smem[:,cta_n,iter_k % RING,:,:,:],
+                                    B_smem[:,cta_n,iter_k % RING,:,:],
                                     B_tensorMap[
                                         batch,
                                         (ncta_N*task_n+cta_n) * smem_N:
@@ -128,8 +128,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                         Fence(wgmma_fence_1, wgmma_fence_2)
                                         for mma_k in seq(0, smem_K / 8):
                                             Sm90_mma_async_tf32(D_rmem[cta_m,cta_n,wg_m,:,:],
-                                                A_smem[cta_m,cta_n,iter_k % RING,(wg_m*wg_M) / 8: ((wg_m+1)*wg_M) / 8,:,mma_k*8:mma_k*8+8],
-                                                B_smem[cta_m,cta_n,iter_k % RING,:,:,mma_k*8:mma_k*8+8], M=wg_M, N=wg_N)
+                                                A_smem[cta_m,cta_n,iter_k % RING,(wg_m*wg_M): ((wg_m+1)*wg_M),mma_k*8:mma_k*8+8],
+                                                B_smem[cta_m,cta_n,iter_k % RING,:,mma_k*8:mma_k*8+8], M=wg_M, N=wg_N)
                                         Arrive(wgmma_async, 1) >> cg[cta_m,cta_n,wg_m]
                                         if iter_k >= 1:
                                             Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
