@@ -201,8 +201,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
     if not tma_to_gmem:
         xgemm_Sm90_wgmma = inline_window(xgemm_Sm90_wgmma, "C_tensorMap = _")
     xgemm_Sm90_wgmma = rename(xgemm_Sm90_wgmma, config.make_proc_name(ncta_M, ncta_N))
-    xgemm_Sm90_wgmma = simplify(xgemm_Sm90_wgmma)
     xgemm_Sm90_wgmma = cut_loop(xgemm_Sm90_wgmma, xgemm_Sm90_wgmma.find_loop("iter_k"), 1)
+    xgemm_Sm90_wgmma = simplify(xgemm_Sm90_wgmma)
     K_split = 2 if enable_split_k else 1
     xgemm_Sm90_wgmma.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
     return xgemm_Sm90_wgmma

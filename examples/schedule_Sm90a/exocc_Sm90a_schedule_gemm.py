@@ -211,10 +211,8 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
 
     # Lift SMEM tiles to cluster scope, with ring buffering (based on iter_k).
     # Generate one shard per CTA in cluster.
-    # Divide M/N dimension by 8.
     gemm = simplify(gemm)  # stage_mem generates exprs too hard for Exo to understand...
     for smem_cursor in (A_smem, B_smem):
-        gemm = divide_dim(gemm, smem_cursor, 0, 8)
         gemm = expand_dim(gemm, smem_cursor, RING, f"iter_k % {RING}")
         gemm = expand_dim(gemm, smem_cursor, ncta_N, "cta_n")
         gemm = expand_dim(gemm, smem_cursor, ncta_M, "cta_m")
@@ -255,29 +253,29 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     A_smem_loop = gemm.forward(A_smem_loop)
     B_smem_loop = gemm.forward(B_smem_loop)
     gemm = unsafe_remove_if(gemm, A_smem_loop, True)
-    # gemm = replace(
-    #     gemm,
-    #     A_smem_loop.parent(),  # CTA loop (for multicast) is parent
-    #     Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
-    #         ncta=ncta_N,
-    #         cta_stride=1,
-    #         size0=smem_M,
-    #         size1=smem_K,
-    #         smem_box=smem_box_A,
-    #     )
-    # )
+    gemm = replace(
+        gemm,
+        A_smem_loop.parent(),  # CTA loop (for multicast) is parent
+        Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
+            ncta=ncta_N,
+            cta_stride=1,
+            size0=smem_M,
+            size1=smem_K,
+            smem_box=smem_box_A,
+        )
+    )
     gemm = unsafe_remove_if(gemm, B_smem_loop, True)
-    # gemm = replace(
-    #     gemm,
-    #     B_smem_loop.parent(),  # CTA loop (for multicast) is parent
-    #     Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
-    #         ncta=ncta_M,
-    #         cta_stride=ncta_N,
-    #         size0=smem_N,
-    #         size1=smem_K,
-    #         smem_box=smem_box_B,
-    #     )
-    # )
+    gemm = replace(
+        gemm,
+        B_smem_loop.parent(),  # CTA loop (for multicast) is parent
+        Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
+            ncta=ncta_M,
+            cta_stride=ncta_N,
+            size0=smem_N,
+            size1=smem_K,
+            smem_box=smem_box_B,
+        )
+    )
 
     # wgmma M-warpgroup loop (children should be replaced with wgmma later)
     # Surround with mbarrier await/arrive.
@@ -302,7 +300,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     mma_k_loop = gemm.forward(mma_k_loop)
     wgmma_cursor = mma_k_loop.body()[0]
     gemm = unsafe_remove_if(gemm, wgmma_cursor, True)
-    # gemm = replace(gemm, wgmma_cursor, Sm90_mma_async_tf32(M=wg_M, N=smem_N))
+    gemm = replace(gemm, wgmma_cursor, Sm90_mma_async_tf32(M=wg_M, N=smem_N))
     gemm = insert_fence(gemm, mma_k_loop.before(), wgmma_fence_1, wgmma_fence_2)
     # Arrive(wgmma_async, 1) >> cg[cta_m, cta_n, wg_m]
     # if k_iter >= 1:
