@@ -251,11 +251,14 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
 
     # Substitute multicast TMA.
     A_smem_loop = gemm.forward(A_smem_loop)
+    A_tma = A_smem_loop.parent()  # CTA loop (for multicast) is parent
     B_smem_loop = gemm.forward(B_smem_loop)
+    B_tma = B_smem_loop.parent()  # CTA loop (for multicast) is parent
     gemm = unsafe_remove_if(gemm, A_smem_loop, True)
+    A_tma = gemm.forward(A_tma)
     gemm = replace(
         gemm,
-        A_smem_loop.parent(),  # CTA loop (for multicast) is parent
+        A_tma,
         Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
             ncta=ncta_N,
             cta_stride=1,
@@ -264,10 +267,11 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
             smem_box=smem_box_A,
         )
     )
+    gemm = set_trailing_barrier_expr(gemm, A_tma, "raw[cta_m, :]")
     gemm = unsafe_remove_if(gemm, B_smem_loop, True)
     gemm = replace(
         gemm,
-        B_smem_loop.parent(),  # CTA loop (for multicast) is parent
+        B_tma,
         Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
             ncta=ncta_M,
             cta_stride=ncta_N,
@@ -276,6 +280,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
             smem_box=smem_box_B,
         )
     )
+    gemm = set_trailing_barrier_expr(gemm, B_tma, "raw[:, cta_n]")
 
     # wgmma M-warpgroup loop (children should be replaced with wgmma later)
     # Surround with mbarrier await/arrive.
@@ -350,7 +355,6 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
         cluster_arrive_here = inner_task_loop.body().after().anchor().before()
         gemm = insert_barrier_alloc(gemm, cluster_arrive_here, "cluster_sync", None, [], CudaClusterSync)
         cluster_arrive_here = gemm.forward(cluster_arrive_here)
-        print(cluster_arrive_here)
         gemm = insert_arrive(gemm, cluster_arrive_here, cuda_in_order, "cluster_sync")
         gemm = insert_await(gemm, inner_task_loop.body().after(), "cluster_sync", cuda_in_order, 0)
 
@@ -377,19 +381,22 @@ config.smem_M = 128
 config.smem_N = 256
 config.tma_to_gmem = False
 config.enable_split_k = False
-ncta_M, ncta_N = 2, 2
+ncta_M, ncta_N = 2, 1
 
 scheduled_gemm = schedule_Sm90a_gemm(config, ncta_M, ncta_N)
 scheduled_gemm = rename(scheduled_gemm, "scheduled_gemm")
-open(os.path.join(thisdir, "out_scheduled_gemm.py"), "w").write(str(scheduled_gemm))
+scheduled_gemm.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=1)
 
-handwritten_gemm = make_Sm90a_gemm(config, ncta_M, ncta_N)
-handwritten_gemm = rename(handwritten_gemm, "handwritten_gemm")
-open(os.path.join(thisdir, "out_handwritten_gemm.py"), "w").write(str(handwritten_gemm))
+def debug_dump_comparison():
+    handwritten_gemm = make_Sm90a_gemm(config, ncta_M, ncta_N)
+    handwritten_gemm = rename(handwritten_gemm, "handwritten_gemm")
+    open(os.path.join(thisdir, "out_scheduled_gemm.py"), "w").write(str(scheduled_gemm))
+    open(os.path.join(thisdir, "out_handwritten_gemm.py"), "w").write(str(handwritten_gemm))
+debug_dump_comparison()
 
 cases.append({
     "algorithm": "gemm",
-    "proc": "handwritten_gemm",
+    "proc": "scheduled_gemm",
     "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
     "K_split_max": 1,
     "A_major": "row", "B_major": "col", "C_major": "col",
@@ -398,4 +405,3 @@ cases.append({
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
 
-del scheduled_gemm
