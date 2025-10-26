@@ -109,8 +109,8 @@ std::vector<GemvPlotInput> generate_gemv_plot_inputs()
 {
     GemvPlotInput plot_input{};
     plot_input.name = "gemv";
-    plot_input.title = "GEMV";
-    plot_input.x_axis = "K";
+    plot_input.title = "GEMV, M=K";
+    plot_input.x_axis = "M";
     for (int m = 1024; m <= 8192; m *= 2) {
         plot_input.sizes.push_back({m, m});
     }

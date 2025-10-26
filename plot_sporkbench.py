@@ -2,6 +2,7 @@
 # Thank you Rin Iwai for helping with this code.
 
 import json
+import math
 import sys
 import os
 from dataclasses import dataclass
@@ -28,6 +29,13 @@ def plot(j_plot, output_dir_name):
         assert x_key in j_raw_samples[0], f"Invalid x_axis {x_key!r}"
     j_sorted_samples = sorted(j_raw_samples, key=lambda j_sample: j_sample[x_key])
 
+    x_label = x_key
+    if x_key == "M":
+        if all(j.get("N") == j["M"] for j in j_sorted_samples):
+            x_label += " = N"
+        if all(j.get("K") == j["M"] for j in j_sorted_samples):
+            x_label += " = K"
+
     # Plot each built-in kernel separately, and plot the max of all user kernels.
     max_tflops = 0
     x = [j_sample[x_key] for j_sample in j_sorted_samples]
@@ -50,15 +58,15 @@ def plot(j_plot, output_dir_name):
                 labels_y[label] = y_per_sample
             y_per_sample[sample_index] = max(y_per_sample[sample_index], tflops)
 
-    if want_peak and "cutlass_Sm80_gemm" in labels_y:
+    if "cutlass_Sm80_gemm" in labels_y:
         print("HACK hiding cutlass_Sm80_gemm for now")
         del labels_y["cutlass_Sm80_gemm"]
 
     # We will always plot exo first
-    def key_lambda(nm):
+    def sort_key(nm):
         return "" if nm == "exo" else nm
 
-    for i, label in enumerate(sorted(labels_y.keys(), key=key_lambda)):
+    for i, label in enumerate(sorted(labels_y.keys(), key=sort_key)):
         y = labels_y[label]
         if i == 0:
             color = "black"
@@ -68,10 +76,14 @@ def plot(j_plot, output_dir_name):
             marker = 'x'
         ax.plot(x, y, marker=marker, color=color, label=label)
 
+    def int_formatter(val, *args):
+        return str(int(val))
+
     ax.grid()
     ax.legend()
-    ax.set_xscale("log")
-    ax.set_xlabel(x_key)
+    ax.set_xscale("log", base=2)
+    ax.xaxis.set_major_formatter(ticker.FuncFormatter(int_formatter))
+    ax.set_xlabel(x_label)
     ax.set_ylabel("TFLOPS")
 
     if want_peak:
@@ -79,6 +91,7 @@ def plot(j_plot, output_dir_name):
         ax2.yaxis.set_major_formatter(ticker.PercentFormatter(1.0))
         ax.set_ylim(0, h100_peak_flops / 1e12)
         ax2.set_ylim(0, 1)
+        ax2.get_xaxis().set_visible(False)
     else:
         ax.set_ylim(0, max_tflops * 1.0625)
 
