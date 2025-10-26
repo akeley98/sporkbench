@@ -77,6 +77,11 @@ struct GemmCase
         );
     }
 
+    bool supports_split_k() const
+    {
+        return K_split_max > 1;
+    }
+
     // These are supposed to be generated from the user's JSON files.
     static const GemmCase user_cases[];
     static const int num_user_cases;
@@ -106,6 +111,11 @@ struct GemvCase
             size.M <= M_max && size.M % M_divisor == 0 &&
             size.K <= K_max && size.K % K_divisor == 0
         );
+    }
+
+    bool supports_split_k() const
+    {
+        return false;
     }
 
     // These are supposed to be generated from the user's JSON files.

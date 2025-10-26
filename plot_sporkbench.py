@@ -12,6 +12,14 @@ import matplotlib.pyplot as plt
 from matplotlib import ticker
 
 
+def get_case_name(j_kernel):
+    supports_split_k = j_kernel["supports_split_k"]
+    name = j_kernel["proc"]
+    if supports_split_k:
+        name += ", K_split=" + str(j_kernel["K_split"])
+    return name
+
+
 def plot(j_plot, output_dir_name):
     title = j_plot["title"]
     x_key = j_plot["x_axis"]
@@ -36,27 +44,54 @@ def plot(j_plot, output_dir_name):
         if all(j.get("K") == j["M"] for j in j_sorted_samples):
             x_label += " = K"
 
-    # Plot each built-in kernel separately, and plot the max of all user kernels.
+    # Try to pick one "best" Exo kernel
+    # This is the one with the highest product of TFLOPS.
+    exo_global_metrics = {}
+    for sample_index, j_sample in enumerate(j_sorted_samples):
+        for j_kernel in j_sample["kernels"]:
+            is_builtin = j_kernel["is_builtin"]
+            if is_builtin:
+                continue
+            case_name = get_case_name(j_kernel)
+            flops_iqr = j_kernel["flops_iqr"]
+            if flops_iqr > 0:
+                flops_lg2 = math.log2(flops_iqr)
+            else:
+                flops_lg2 = -1e300
+            exo_global_metrics[case_name] = exo_global_metrics.get(case_name, 0) + flops_lg2
+    best_exo_case_name = ""
+    if exo_global_metrics:
+        pairs = [(metric, name) for name, metric in exo_global_metrics.items()]
+        pairs.sort()
+        # print(pairs[-4:])
+        best_exo_case_name = pairs[-1][1]
+
+    # Plot each built-in kernel separately.
+    # Plot the max of all user kernels (specialized).
+    # Plot also best_exo_case_name.
     max_tflops = 0
     x = [j_sample[x_key] for j_sample in j_sorted_samples]
     labels_y = {}
     for sample_index, j_sample in enumerate(j_sorted_samples):
         for j_kernel in j_sample["kernels"]:
-            proc_name = j_kernel["proc"]
+            is_builtin = j_kernel["is_builtin"]
+            case_name = get_case_name(j_kernel)
             flops_iqr = j_kernel["flops_iqr"]
             tflops = flops_iqr / 1e12
             max_tflops = max(max_tflops, tflops)
-            is_builtin = j_kernel["is_builtin"]
             if is_builtin:
-                label = proc_name
-                assert proc_name != "exo"
+                labels = (case_name, )
+                assert not case_name.startswith("exo (")
+            elif case_name == best_exo_case_name:
+                labels = (f"exo ({best_exo_case_name})", "exo (specialized)")
             else:
-                label = "exo"
-            y_per_sample = labels_y.get(label)
-            if y_per_sample is None:
-                y_per_sample = [0.0] * len(j_sorted_samples)
-                labels_y[label] = y_per_sample
-            y_per_sample[sample_index] = max(y_per_sample[sample_index], tflops)
+                labels = ("exo (specialized)", )
+            for label in labels:
+                y_per_sample = labels_y.get(label)
+                if y_per_sample is None:
+                    y_per_sample = [0.0] * len(j_sorted_samples)
+                    labels_y[label] = y_per_sample
+                y_per_sample[sample_index] = max(y_per_sample[sample_index], tflops)
 
     if "cutlass_Sm80_gemm" in labels_y:
         print("HACK hiding cutlass_Sm80_gemm for now")
@@ -64,15 +99,25 @@ def plot(j_plot, output_dir_name):
 
     # We will always plot exo first
     def sort_key(nm):
-        return "" if nm == "exo" else nm
+        if nm == "exo (specialized)":
+            key = -1
+        elif nm.startswith("exo ("):
+            key = -2
+        else:
+            key = 0
+        return (key, nm)
 
     for i, label in enumerate(sorted(labels_y.keys(), key=sort_key)):
         y = labels_y[label]
         if i == 0:
+            color = "gray"
+            marker = 'o'
+            # Put a continue here if you don't want best_exo_case_name plotted.
+        elif i == 1:
             color = "black"
             marker = 'o'
         else:
-            color = list(mcolors.TABLEAU_COLORS.keys())[i - 1]
+            color = list(mcolors.TABLEAU_COLORS.keys())[i - 2]
             marker = 'x'
         ax.plot(x, y, marker=marker, color=color, label=label)
 

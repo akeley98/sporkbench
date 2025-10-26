@@ -97,6 +97,7 @@ and each `KernelData` object contains
     {
         "proc": str
         "K_split": int  # Passed as K_split arg; 1 if K_split not supported
+        "supports_split_k": bool
         "is_builtin": bool  # False iff user (build input directory) provided this kernel
         "flops_samples": List[float]
         "flops_iqr": float  # As defined by benchmark methodology (below)

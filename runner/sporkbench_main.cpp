@@ -245,9 +245,11 @@ TestDataConfig get_data_config(int trial_i, int K)
 template <typename KernelCase>
 void summarize_entry(const MainData& main_data, KernelCaseEntry<KernelCase>& entry, bool is_first)
 {
+    const bool supports_split_k = entry.p_case->supports_split_k();
     fprintf(main_data.json_file, "     %c{\n", is_first ? ' ' : ',');
     fprintf(main_data.json_file, "        \"proc\": \"%s\",\n", entry.p_case->proc_name);
     fprintf(main_data.json_file, "        \"K_split\": %i,\n", entry.K_split);
+    fprintf(main_data.json_file, "        \"supports_split_k\": %s,\n", supports_split_k ? "true" : "false");
     fprintf(main_data.json_file, "        \"is_builtin\": %s,\n", entry.is_builtin ? "true" : "false");
     fprintf(main_data.json_file, "        \"flops_samples\": [");
     bool need_comma = false;
