@@ -44,12 +44,21 @@ def plot(j_plot, output_dir_name):
                 y_per_sample = [0.0] * len(j_sorted_samples)
                 labels_y[label] = y_per_sample
             y_per_sample[sample_index] = max(y_per_sample[sample_index], tflops)
-    
-    for i, label in enumerate(sorted(labels_y.keys())):
+
+    # We will always plot exo first
+    def key_lambda(nm):
+        return "" if nm == "exo" else nm
+
+    for i, label in enumerate(sorted(labels_y.keys(), key=key_lambda)):
         y = labels_y[label]
-        color = list(mcolors.TABLEAU_COLORS.keys())[i]
-        ax.plot(x, y, marker='o', color=color, label=label)
-    
+        if i == 0:
+            color = "black"
+            marker = 'o'
+        else:
+            color = list(mcolors.TABLEAU_COLORS.keys())[i - 1]
+            marker = 'x'
+        ax.plot(x, y, marker=marker, color=color, label=label)
+
     ax.grid()
     ax.legend()
     ax.set_xscale("log")
