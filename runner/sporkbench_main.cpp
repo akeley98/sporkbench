@@ -534,9 +534,10 @@ int Main(int argc, char** argv)
     {
         fprintf(
                 main_data.json_file,
-                " %c{\"name\": \"%s\", \"title\": \"%s\", \"x_axis\": \"%s\", \"samples\": [\n",
+                " %c{\"name\": \"%s\", \"title\": \"%s %s\", \"x_axis\": \"%s\", \"samples\": [\n",
                 need_comma ? ',' : ' ',
                 plot_input.name.c_str(),
+                is_h100 ? "sm_90a" : "sm_80",
                 plot_input.title.c_str(),
                 plot_input.x_axis.c_str()
         );

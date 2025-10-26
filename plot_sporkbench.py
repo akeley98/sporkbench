@@ -12,11 +12,16 @@ from matplotlib import ticker
 
 
 def plot(j_plot, output_dir_name):
+    title = j_plot["title"]
     x_key = j_plot["x_axis"]
     fig = plt.figure(constrained_layout=True)
-    plt.title(j_plot["title"])
+    plt.title(title)
     ax = fig.gca()
-    # ax2 = ax.twinx()
+
+    h100_peak_flops = 494.5e+12
+    want_peak = "sm_90a" in title and "GEMM" in title
+    if want_peak:
+        ax2 = ax.twinx()
 
     j_raw_samples = j_plot["samples"]
     if j_raw_samples:
@@ -45,6 +50,10 @@ def plot(j_plot, output_dir_name):
                 labels_y[label] = y_per_sample
             y_per_sample[sample_index] = max(y_per_sample[sample_index], tflops)
 
+    if want_peak and "cutlass_Sm80_gemm" in labels_y:
+        print("HACK hiding cutlass_Sm80_gemm for now")
+        del labels_y["cutlass_Sm80_gemm"]
+
     # We will always plot exo first
     def key_lambda(nm):
         return "" if nm == "exo" else nm
@@ -64,7 +73,14 @@ def plot(j_plot, output_dir_name):
     ax.set_xscale("log")
     ax.set_xlabel(x_key)
     ax.set_ylabel("TFLOPS")
-    ax.set_ylim(0, max_tflops * 1.0625)
+
+    if want_peak:
+        ax2.set_ylabel("%% of peak (%.1f TFLOPS)" % (h100_peak_flops / 1e12))
+        ax2.yaxis.set_major_formatter(ticker.PercentFormatter(1.0))
+        ax.set_ylim(0, h100_peak_flops / 1e12)
+        ax2.set_ylim(0, 1)
+    else:
+        ax.set_ylim(0, max_tflops * 1.0625)
 
     fig.savefig(os.path.join(output_dir_name, f"{j_plot['name']}.png"))
 
