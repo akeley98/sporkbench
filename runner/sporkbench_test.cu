@@ -192,8 +192,8 @@ bool launch_device_compare_tensor(
         GemmSize size, const char* proc_name, const Test* d_test, const Expected* d_expected, bool test_row_major,
         bool exact, cudaStream_t stream)
 {
-    dim3 grid(unsigned(size.N + 127) / 128u, unsigned(size.M), unsigned(size.L));
-    dim3 block(128, 1, 1);
+    dim3 grid(unsigned(size.N + 63u) / 64u, unsigned(size.M + 3u) / 4u, unsigned(size.L));
+    dim3 block(64, 4, 1);
     unsigned long long* d_bitfield = 0;
     cudaMallocAsync(&d_bitfield, sizeof(*d_bitfield), stream);
     if (!d_bitfield) {

@@ -27,9 +27,15 @@ def plot(j_plot, output_dir_name):
     plt.title(title)
     ax = fig.gca()
 
-    h100_peak_flops = 494.5e+12
-    want_peak = "sm_90a" in title and "GEMM" in title
+    want_peak = "sm_90a" in title
     if want_peak:
+        if "GEMM" in title:
+            h100_peak_flops = 494.5e+12
+        elif "GEMV" in title:
+            # XXX Is TB 1 trillion bytes or 1 << 40 bytes?
+            h100_peak_flops = 3.35e+12 / 4 * 2
+        else:
+            assert 0, "implement peak"
         ax2 = ax.twinx()
 
     j_raw_samples = j_plot["samples"]

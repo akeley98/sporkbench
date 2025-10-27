@@ -105,14 +105,16 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
     return plots;
 }
 
-std::vector<GemvPlotInput> generate_gemv_plot_inputs()
+std::vector<GemvPlotInput> generate_gemv_plot_inputs(bool is_h100)
 {
     GemvPlotInput plot_input{};
     plot_input.name = "gemv";
     plot_input.title = "GEMV, M=K";
     plot_input.x_axis = "M";
-    for (int m = 1024; m <= 8192; m *= 2) {
+    const int max_M = is_h100 ? 65536 : 8192;
+    for (int m = 1024; m <= max_M; m *= 2) {
         plot_input.sizes.push_back({m, m});
+        plot_input.sizes.push_back({m / 2 * 3, m / 2 * 3});
     }
     return {plot_input};
 
@@ -562,7 +564,7 @@ int Main(int argc, char** argv)
     }
 
     if (GemvCase::num_user_cases > 0) {
-        for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs()) {
+        for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs(is_h100)) {
             begin_json_plot_object(plot_input);
             generate_gemv_plot_samples(main_data, plot_input);
             end_json_plot_object();
