@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 from matplotlib import ticker
 
 
+plt.rcParams.update({"font.size": 15, "figure.figsize": [8.0, 4.8]})
+
+
 def get_case_name(j_kernel):
     supports_split_k = j_kernel["supports_split_k"]
     name = j_kernel["proc"]
@@ -46,9 +49,9 @@ def plot(j_plot, output_dir_name):
     x_label = x_key
     if x_key == "M":
         if all(j.get("N") == j["M"] for j in j_sorted_samples):
-            x_label += " = N"
+            x_label += ", N"
         if all(j.get("K") == j["M"] for j in j_sorted_samples):
-            x_label += " = K"
+            x_label += ", K"
 
     # Try to pick one "best" Exo kernel
     # This is the one with the highest product of TFLOPS.
@@ -87,11 +90,12 @@ def plot(j_plot, output_dir_name):
             max_tflops = max(max_tflops, tflops)
             if is_builtin:
                 labels = (case_name, )
-                assert not case_name.startswith("exo (")
+                assert not case_name.startswith("Exo-GPU (")
             elif case_name == best_exo_case_name:
-                labels = (f"exo ({best_exo_case_name})", "exo (specialized)")
+                labels = (f"Exo-GPU (one kernel)", "Exo-GPU (specialized)")
+                # labels = (f"Exo-GPU ({best_exo_case_name})", "Exo-GPU (specialized)")
             else:
-                labels = ("exo (specialized)", )
+                labels = ("Exo-GPU (specialized)", )
             for label in labels:
                 y_per_sample = labels_y.get(label)
                 if y_per_sample is None:
@@ -105,9 +109,9 @@ def plot(j_plot, output_dir_name):
 
     # We will always plot exo first
     def sort_key(nm):
-        if nm == "exo (specialized)":
+        if nm == "Exo-GPU (specialized)":
             key = -1
-        elif nm.startswith("exo ("):
+        elif nm.startswith("Exo-GPU ("):
             key = -2
         else:
             key = 0
@@ -138,7 +142,7 @@ def plot(j_plot, output_dir_name):
     ax.set_ylabel("TFLOPS")
 
     if want_peak:
-        ax2.set_ylabel("%% of peak (%.1f TFLOPS)" % (h100_peak_flops / 1e12))
+        ax2.set_ylabel("%% of peak (%.3f TFLOPS)" % (h100_peak_flops / 1e12))
         ax2.yaxis.set_major_formatter(ticker.PercentFormatter(1.0))
         ax.set_ylim(0, h100_peak_flops / 1e12)
         ax2.set_ylim(0, 1)
@@ -147,6 +151,7 @@ def plot(j_plot, output_dir_name):
         ax.set_ylim(0, max_tflops * 1.0625)
 
     fig.savefig(os.path.join(output_dir_name, f"{j_plot['name']}.png"))
+    print(title, best_exo_case_name)
 
 
 if __name__ == "__main__":
