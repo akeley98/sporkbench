@@ -3,6 +3,7 @@ from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.cuda import *
 from exo.platforms.Sm80 import *
+from exo.platforms.Sm90 import *
 
 from Sm80_gemm_pre_config import config, Sm80GemmConfig
 
@@ -59,6 +60,11 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
     smem_M_ITERS = smem_M // smem_team_size
     smem_N_ITERS = smem_N // smem_team_size
 
+    if config.swizzle == 0:
+        smem_type = CudaSmemLinear
+    else:
+        smem_type = Sm90_SmemSwizzled(config.swizzle)
+
     @proc
     def p(
         L: size, M: size, N: size, K_splits: size, K_cta: size,
@@ -83,8 +89,8 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                   war: barrier(raw) @ CudaMbarrier
 
                   # Tiles (ring buffered)
-                  A_smem: f32[RING, smem_16B_K, smem_M, 4] @ CudaSmemLinear
-                  B_smem: f32[RING, smem_16B_K, smem_N, 4] @ CudaSmemLinear
+                  A_smem: f32[RING, smem_16B_K, smem_M, 4] @ smem_type
+                  B_smem: f32[RING, smem_16B_K, smem_N, 4] @ smem_type
 
                   # Zero-out accumulator (warp code)
                   D_rmem: f32[M_warps, N_warps, warp_M / 16, warp_N / 8, 16, 8] @ Sm80_RmemMatrixD(16, 8)

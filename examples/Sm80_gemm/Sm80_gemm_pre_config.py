@@ -24,9 +24,11 @@ class Sm80GemmConfig:
     blocks_per_sm: int = None
     mbarrier_ring: int = 3
     mbarrier_lag: int = 1
+    swizzle: int = 0
 
     def make_proc_name(self, sync_name: str):
         suffix = "dataParallel" if not self.enable_split_k else "splitK"
-        return f"xgemm_Sm80_m{self.smem_M}n{self.smem_N}k{self.smem_K}_m{self.warp_M}n{self.warp_N}_{sync_name}_{suffix}"
+        sw = "" if self.swizzle == 0 else f"_SW{self.swizzle}"
+        return f"xgemm_Sm80_m{self.smem_M}n{self.smem_N}k{self.smem_K}_m{self.warp_M}n{self.warp_N}{sw}_{sync_name}_{suffix}"
 
 config = Sm80GemmConfig()
