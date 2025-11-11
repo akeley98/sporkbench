@@ -18,16 +18,27 @@ if __name__ == "__main__":
     plt.title(title)
     ax = fig.gca()
 
-    x_samples = []
-    y_samples = []
-    for sz, raw_dt in results:
-        dt = raw_dt / 5.0
-        x_samples.append(sz)
-        y_samples.append(dt)
+    for label, sample_pairs in sorted(results.items()):
+        if label == "gemv":
+            marker = 'x'
+            color = "darkred"
+        elif label.startswith("non-split-k"):
+            marker = 'o'
+            color = "darkblue"
+        elif label.startswith("split-k"):
+            marker = 'o'
+            color = "deepskyblue"
+        else:
+            assert 0, label
+        x_samples = []
+        y_samples = []
+        for sz, dt in sample_pairs:
+            x_samples.append(sz)
+            y_samples.append(dt)
+        ax.plot(x_samples, y_samples, marker=marker, color=color, label=label)
 
     def int_formatter(val, *args):
         return "%g" % val
-    ax.plot(x_samples, y_samples, marker='o', color="darkred")
     ax.grid()
     # ax.legend()
     ax.set_xscale("log", base=2)
@@ -38,6 +49,7 @@ if __name__ == "__main__":
     ax.yaxis.set_major_formatter(ticker.FuncFormatter(int_formatter))
     ax.set_xlabel("M = N = K")
     ax.set_ylabel("Seconds")
+    ax.legend()
 
     fig.savefig(out_name)
     print(out_name)
