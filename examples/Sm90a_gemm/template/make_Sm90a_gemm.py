@@ -117,7 +117,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                     ncta=ncta_M, cta_stride=ncta_N, size0=smem_N, size1=smem_K, smem_box=smem_box_B
                                 ) >> raw[:,cta_n]
                                 for cta_m in cuda_threads(0, ncta_M, unit=cuda_cta_in_cluster):
-                                    Arrive(cuda_temporal, 1) >> raw[cta_m,:] >> raw[:,cta_n]
+                                    Arrive(cuda_temporal) >> raw[cta_m,:] >> raw[:,cta_n]
 
                         with CudaWarps(name="consumer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -130,10 +130,10 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                             Sm90_mma_async_tf32(D_rmem[cta_m,cta_n,wg_m,:,:],
                                                 A_smem[cta_m,cta_n,iter_k % RING,(wg_m*wg_M): ((wg_m+1)*wg_M),mma_k*8:mma_k*8+8],
                                                 B_smem[cta_m,cta_n,iter_k % RING,:,mma_k*8:mma_k*8+8], M=wg_M, N=wg_N)
-                                        Arrive(wgmma_async, 1) >> cg[cta_m,cta_n,wg_m]
+                                        Arrive(wgmma_async) >> cg[cta_m,cta_n,wg_m]
                                         if iter_k >= 1:
                                             Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
-                                    Arrive(cuda_in_order, 1) >> war[cta_m,:] >> war[:,cta_n]
+                                    Arrive(cuda_in_order) >> war[cta_m,:] >> war[:,cta_n]
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                         for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
@@ -172,14 +172,14 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                             size0=smem_N, size1=smem_M, smem_box=smem_box_C,
                                         )
                                     tma_cg: barrier @ CudaCommitGroup
-                                    Arrive(tma_to_gmem_async, 1) >> tma_cg
+                                    Arrive(tma_to_gmem_async) >> tma_cg
                                     Await(tma_cg, cuda_in_order, 0)
                         Fence(cuda_in_order, cuda_in_order)  # cluster scope
                     else:
                         # Await(cg, cuda_in_order, 0) and write D_rmem -> C steps are fissioned.
                         # We must not arrive on the epilogue cluster sync until all wgmma retire.
                         cluster_sync: barrier @ CudaClusterSync
-                        Arrive(cuda_in_order, 1) >> cluster_sync
+                        Arrive(cuda_in_order) >> cluster_sync
 
                         for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                             for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
