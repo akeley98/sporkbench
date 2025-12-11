@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+import time
+
 from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.cuda import *
@@ -151,7 +154,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                         Sm90_mma_store_d_col_major_tf32(
                                             wg_M, wg_N, C_smem[cta_m, cta_n, :,wg_m * wg_M: wg_m * wg_M + wg_M],
                                             D_rmem[cta_m,cta_n,wg_m,:,:], M=wg_M, N=wg_N)
-                                Fence(cuda_in_order, tma_to_gmem_async)
+                                Fence(cuda_in_order, cuda_generic_and_async_proxy)
                                 with CudaWarps(name="producer"):
                                     if enable_split_k:
                                         Sm90_reduce_tensor_to_gmem_linear_2f32(
@@ -204,5 +207,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
     xgemm_Sm90_wgmma = cut_loop(xgemm_Sm90_wgmma, xgemm_Sm90_wgmma.find_loop("iter_k"), 1)
     xgemm_Sm90_wgmma = simplify(xgemm_Sm90_wgmma)
     K_split = 2 if enable_split_k else 1
+    t = time.time()
     xgemm_Sm90_wgmma.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
+    dt = time.time() - t
+    print("%.3f s, %s" % (dt, xgemm_Sm90_wgmma.name()))
     return xgemm_Sm90_wgmma

@@ -1,4 +1,7 @@
 from __future__ import annotations
+
+import time
+
 from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.cuda import *
@@ -109,7 +112,7 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                     if k_iter < K_cta / smem_K:
                       if use_mbarrier:
                         # Wait for ring buffer to be consumed; don't wait for first RING-many iterations
-                        Await(war, Sm80_generic, ~RING)
+                        Await(war, cuda_temporal, ~RING)
                       for kt in cuda_threads(0, smem_16B_K, unit=smem_team_size * cuda_thread):
                         for lane in cuda_threads(0, smem_team_size):
                           for ms in seq(0, smem_M_ITERS):
@@ -142,7 +145,7 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                     # Single-buffer-only synchronization.
                     # Loaded values above immediately used in MMA below.
                     if LAG == 0:
-                      Fence(Sm80_generic, Sm80_generic)
+                      Fence(Sm80_generic, cuda_in_order)
 
                     # MMA except on first LAG-many iterations.
                     if k_iter >= LAG:
@@ -197,9 +200,9 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                     if use_mbarrier:
                       pass
                     elif LAG == 0:
-                      Fence(cuda_in_order, Sm80_generic)
+                      Fence(cuda_in_order, cuda_in_order)
                     else:
-                      Fence(Sm80_generic, Sm80_generic)
+                      Fence(Sm80_generic, cuda_in_order)
                   # End k_iter-seq loop
 
                   # Write out accumulator
@@ -242,7 +245,10 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
       p = delete_buffer(p, p.find_alloc_or_arg("raw"))
     p = simplify(p)
     K_splits = 2 if enable_split_k else 1
+    t = time.time()
     p.sync_check(L=2, M=160, N=320, K_cta=smem_M * 5, K_splits=K_splits)
+    dt = time.time() - t
+    print("%.3f s, %s" % (dt, p.name()))
     return p
 
 

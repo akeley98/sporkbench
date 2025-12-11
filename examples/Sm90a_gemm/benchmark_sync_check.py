@@ -37,8 +37,8 @@ def benchmark(p, sz_to_args) -> List[Tuple[int, float]]:
             def callback():
                 p.sync_check(**sz_to_args(sz))
             dt = timeit.timeit(callback, number=number) / number
+            print("%4d %9.2f %s" % (sz, dt, p.name()), file=sys.stderr)
             if number > 1:
-                print("%4d %9.2f %s" % (sz, dt, p.name()), file=sys.stderr)
                 results.append((sz, dt))
     return results
 

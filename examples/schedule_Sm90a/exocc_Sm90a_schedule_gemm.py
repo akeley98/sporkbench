@@ -341,12 +341,28 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = insert_await(gemm, assign_wg_m_loop.body().before(), "cg[cta_m, cta_n, wg_m]", cuda_in_order, 0)
     gemm = wrap_with_context(gemm, assign_wg_m_loop, CudaWarps(name="consumer"))
     assign_wg_m_loop = gemm.forward(assign_wg_m_loop)
+    epilogue_gap = assign_wg_m_loop.body()[0].after()
     # TODO: is there a better way to set n_lifts?
-    gemm = fission(gemm, assign_wg_m_loop.body()[0].after(), n_lifts=4)
+    gemm = fission(gemm, epilogue_gap, n_lifts=4)
+    inner_task_loop = gemm.forward(inner_task_loop)
+    assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
     if enable_split_k:
-        assert 0
-        # Insert cluster sync at the end.
-        inner_task_loop = gemm.forward(inner_task_loop)
+        consumer_epilogue_assign = assign_sub_wg_m_loop.parent().parent()
+        print(consumer_epilogue_assign)
+        gemm = stage_mem(gemm, consumer_epilogue_assign,
+            f"C_tensorMap[batch, "
+            f"(task_n * {ncta_N} + cta_n) * {smem_N} : (task_n * {ncta_N} + cta_n + 1) * {smem_N}, "
+            f"(task_m * {ncta_M} + cta_m) * {smem_M} : (task_m * {ncta_M} + cta_m + 1) * {smem_M}]",
+            "C_smem",
+            True,  # accum
+            CudaSmemLinear,
+        )
+        C_smem = gemm.find_alloc_or_arg("C_smem")
+        gemm = expand_dim(gemm, C_smem, ncta_N, "cta_n")
+        gemm = expand_dim(gemm, C_smem, ncta_M, "cta_m")
+        gemm = simplify(gemm)
+        gemm = lift_alloc(gemm, C_smem, n_lifts=2)
+        gemm = insert_fence(gemm, C_smem.before(), cuda_in_order, cuda_in_order)
         gemm = insert_fence(gemm, inner_task_loop.body().after(), cuda_in_order, cuda_in_order)
     else:
         gemm = replace(gemm, assign_sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=wg_N))
@@ -369,6 +385,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
         gemm = cut_loop(gemm, iter_k_loop, 1)
 
     gemm = simplify(gemm)
+    print(gemm)
     return gemm
 
 
