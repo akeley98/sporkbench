@@ -114,7 +114,8 @@ exocc = {Qarg(exocc)}
 python3 = {Qarg(python3)}
 nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
-    --expt-extended-lambda --expt-relaxed-constexpr
+    --expt-extended-lambda --expt-relaxed-constexpr $
+    --keep --keep-dir {Qarg(bin_dir)}
 
 rule nvcc_Sm80
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d
@@ -123,9 +124,6 @@ rule nvcc_Sm80
 rule nvcc_Sm90a
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a $in -o $out -MD -MF $out.d
   depfile = $out.d
-
-rule nvcc_Sm80_keep
-  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d -keep
 
 rule link
   command = $nvcc_bin $nvcc_args $in -o $out -lcuda -lcublas
@@ -164,7 +162,7 @@ for i, src_info in enumerate(exocc_sources):
 # Write CUDA -> .o builds for the runner itself.
 build.write("\n")
 for src_info in runner_sources:
-    build.write(f"build {Qpath(src_info.o)}: nvcc_Sm80_keep {Qpath(src_info.cu)}\n")
+    build.write(f"build {Qpath(src_info.o)}: nvcc_Sm80 {Qpath(src_info.cu)}\n")
 
 
 # Write JSON-to-C build
