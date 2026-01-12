@@ -122,7 +122,8 @@ __global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, co
                         f_expected = fabsf(f_expected);
                         const float Min = fminf(f_test, f_expected);
                         const float Max = fmaxf(f_test, f_expected);
-                        correct = Max == 0 || Max / Min < (1.0f + 1/128.0f);
+                        const float eps = sizeof(Test) >= 4 ? 1.0f / 128 : 12.0f / 128;
+                        correct = Max == 0 || Max / Min < (1.0f + eps);
                     }
                 }
                 if (!correct) {

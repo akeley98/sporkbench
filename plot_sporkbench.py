@@ -106,7 +106,7 @@ def plot(j_plot, output_dir_name):
                     labels_y[label] = y_per_sample
                 y_per_sample[sample_index] = max(y_per_sample[sample_index], tflops)
 
-    if "cutlass_Sm80_gemm" in labels_y:
+    if "cutlass_Sm80_gemm" in labels_y and "sm_80" not in title:
         print("HACK hiding cutlass_Sm80_gemm for now")
         del labels_y["cutlass_Sm80_gemm"]
 

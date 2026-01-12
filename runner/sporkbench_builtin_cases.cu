@@ -135,6 +135,7 @@ const std::vector<GemmCaseT<Ctype, ABtype>>& get_builtin_cases_gemm_impl(const G
         1, 1,  // K_split: set to 1, so we don't sweep this parameter.
         1, INT32_MAX,  // K_cluster
       },
+      make_cutlass_Sm80_GemmCase(Ctype{}, ABtype{}),
     };
     return result;
 }

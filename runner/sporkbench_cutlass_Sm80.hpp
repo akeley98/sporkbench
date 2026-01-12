@@ -2,6 +2,8 @@
 
 namespace sporkbench {
 
-extern const GemmCase cutlass_Sm80_GemmCase;
+GemmCase_f32_f32 make_cutlass_Sm80_GemmCase(float, float);
+GemmCase_f32_f16 make_cutlass_Sm80_GemmCase(float, __half);
+GemmCase_f16_f16 make_cutlass_Sm80_GemmCase(__half, __half);
 
 }  // end namespace
