@@ -1,5 +1,8 @@
 #pragma once
 
+#define exo_f16 __half
+#define exo_bf16 __nv_bfloat16
+
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>

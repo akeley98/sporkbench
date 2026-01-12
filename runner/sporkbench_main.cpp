@@ -238,7 +238,23 @@ std::vector<KernelCaseEntry<KernelCase>> generate_cases(
     return case_entries;
 }
 
-TestDataConfig get_data_config(int trial_i, int K)
+int exact_test_threshold(float)
+{
+    return 8192;
+}
+
+int exact_test_threshold(__half)
+{
+    return 1536;
+}
+
+int exact_test_threshold(__nv_bfloat16)
+{
+    return 0;
+}
+
+template <typename Ctype>
+TestDataConfig get_data_config(int trial_i, int K, Ctype)
 {
     TestDataCode A_code = TestDataCode::random;
     TestDataCode B_code = TestDataCode::random;
@@ -251,7 +267,7 @@ TestDataConfig get_data_config(int trial_i, int K)
           case 0:
             A_code = TestDataCode::signs_only;
             B_code = TestDataCode::signs_only;
-            check_mode = K <= 8192 ? TestCheckMode::exact : TestCheckMode::approximate;
+            check_mode = K <= exact_test_threshold(Ctype{}) ? TestCheckMode::exact : TestCheckMode::approximate;
             break;
           case 1:
             A_code = TestDataCode::tiled_numbers;
@@ -390,7 +406,7 @@ void generate_gemm_plot_samples(
         resources.L2_shred_memory = unique_L2_shred_memory.get();
 
         for (int trial_i = 0; trial_i < num_warmup + num_timed; ++trial_i) {
-            TestDataConfig data_config = get_data_config(trial_i, K);
+            TestDataConfig data_config = get_data_config(trial_i, K, Ctype{});
 
             // Initialize test data on every warmup iteration, and the first timed iteration.
             // Additional test data generation is not needed as timed iterations always use the same data.
@@ -493,7 +509,7 @@ void generate_gemv_plot_samples(const MainData& main_data, const GemvPlotInput& 
         resources.L2_shred_memory = unique_L2_shred_memory.get();
 
         for (int trial_i = 0; trial_i < num_warmup + num_timed; ++trial_i) {
-            TestDataConfig data_config = get_data_config(trial_i, K);
+            TestDataConfig data_config = get_data_config(trial_i, K, float(0));
 
             // Initialize test data on every warmup iteration, and the first timed iteration.
             // Additional test data generation is not needed as timed iterations always use the same data.

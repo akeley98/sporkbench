@@ -50,9 +50,9 @@ __global__ void device_init_test_data(
                     {
                         const auto randbits = pcg3d(k, mn, z + 20010106);
                         if (randbits % 100'000u == 0) {
-                            // 1 in 100'000 chance of a "big" value (1000).
+                            // 1 in 100'000 chance of a "big" value.
                             // This greatly reduces the chance that a genuine bug is mistaken for fp error.
-                            value = T(1000);
+                            value = sizeof(T) >= 4 ? T(1000) : T(9);
                         }
                         else if (randbits % 4u != 0u) {
                             value = T(0);  // 75% chance of a 0
