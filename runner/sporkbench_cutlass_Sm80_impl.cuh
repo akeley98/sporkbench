@@ -9,6 +9,7 @@
 
 
 namespace sporkbench {
+namespace cutlass_gemm {
 
 // https://github.com/NVIDIA/cutlass/blob/main/examples/14_ampere_tf32_tensorop_gemm/ampere_tf32_tensorop_gemm.cu
 
@@ -136,7 +137,7 @@ void run_cutlass_Sm80_gemm(cublasHandle_t, GemmSize size, const ABtype* orig_A, 
 }
 
 template <typename ElementAccumulator, typename cutlass_Ctype, typename cutlass_ABtype, typename Ctype, typename ABtype>
-GemmCaseT<Ctype, ABtype> make_cutlass_Sm80_GemmCase_impl()
+GemmCaseT<Ctype, ABtype> make_GemmCase()
 {
     return {
         CudaArch::Sm80,
@@ -152,19 +153,5 @@ GemmCaseT<Ctype, ABtype> make_cutlass_Sm80_GemmCase_impl()
     };
 }
 
-GemmCase_f32_f32 make_cutlass_Sm80_GemmCase(float, float)
-{
-    return make_cutlass_Sm80_GemmCase_impl<float, float, float, float, float>();
-}
-
-GemmCase_f32_f16 make_cutlass_Sm80_GemmCase(float, __half)
-{
-    return make_cutlass_Sm80_GemmCase_impl<float, float, cutlass::half_t, float, __half>();
-}
-
-GemmCase_f16_f16 make_cutlass_Sm80_GemmCase(__half, __half)
-{
-    return make_cutlass_Sm80_GemmCase_impl<cutlass::half_t, cutlass::half_t, cutlass::half_t, __half, __half>();
-}
-
+}  // end namespace
 }  // end namespace
