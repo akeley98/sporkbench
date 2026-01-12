@@ -2,6 +2,7 @@
 
 #include "sporkbench_cases.hpp"
 
+#include <variant>
 #include <vector>
 
 namespace sporkbench {
@@ -27,20 +28,27 @@ enum class TestDataCode
     signs_only = 3,
 };
 
-struct GemmTestResources
+template <typename Ctype, typename ABtype>
+struct GemmTestResourcesT
 {
     cublasHandle_t cublasH;
     cudaEvent_t start_event;
     cudaEvent_t end_event;
-    float* A_row_major;
-    float* B_row_major;
-    float* A_col_major;
-    float* B_col_major;
-    float* C_test;
-    float* C_expected;
+    ABtype* A_row_major;
+    ABtype* B_row_major;
+    ABtype* A_col_major;
+    ABtype* B_col_major;
+    Ctype* C_test;
+    Ctype* C_expected;
     size_t L2_shred_bytes;
     void* L2_shred_memory;
 };
+
+using GemmTestResourcesUnion = std::variant<
+    GemmTestResourcesT<float, float>,
+    GemmTestResourcesT<float, __half>,
+    GemmTestResourcesT<__half, __half>
+>;
 
 struct GemvTestResources
 {
@@ -55,10 +63,10 @@ struct GemvTestResources
     void* L2_shred_memory;
 };
 
-void init_test_data(const GemmTestResources& resources, GemmSize size, TestDataCode A_code, TestDataCode B_code);
+void init_test_data(GemmTestResourcesUnion resources, GemmSize size, TestDataCode A_code, TestDataCode B_code);
 
 TestResult run_gemm_case(
-        const GemmCase& gemm_case, const GemmTestResources& resources, GemmSize size, TestCheckMode check_mode);
+        GemmCaseUnion gemm_case, GemmTestResourcesUnion resources, GemmSize size, TestCheckMode check_mode);
 
 void init_test_data(const GemvTestResources& resources, GemvSize size, TestDataCode A_code, TestDataCode B_code);
 

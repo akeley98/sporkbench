@@ -67,7 +67,25 @@ struct GemvPlotInput
     std::vector<GemvPlotSize> sizes;
 };
 
-std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
+template <typename Ctype, typename ABtype, typename PlotInput>
+void fix_plot_names(std::vector<PlotInput>& plots, CudaArch arch)
+{
+    std::string AB_name = case_type_name(ABtype{});
+    std::string C_name = case_type_name(Ctype{});
+    std::string name_suffix = "_";
+    std::string title_suffix = " (";
+    name_suffix += arch_name(arch);
+    title_suffix += arch_name(arch);
+    name_suffix += "_" + C_name + "_" + AB_name;
+    title_suffix += "." + C_name + "." + AB_name + "." + AB_name + ")";
+    for (PlotInput& plot : plots) {
+        plot.name += name_suffix;
+        plot.title += title_suffix;
+    }
+}
+
+template <typename Ctype, typename ABtype>
+std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ctype, ABtype> dummy_case)
 {
     std::vector<GemmPlotInput> plots;
 
@@ -77,7 +95,7 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
         batched.sizes.push_back(GemmPlotSize{4, M, N, K});
     };
 
-    if (is_h100) {
+    if (arch != CudaArch::Sm80) {
         GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
         GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
         GemmPlotInput L1K65536{"L1K65536", "GEMM, non-batched, N=1536, K=65536", "M", {}};
@@ -95,29 +113,33 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(bool is_h100)
     for (int M = 512; M <= 4096; M += 512) {
         add_MNK(M, M, M, L1_square, L4_square);
     }
-    if (is_h100) {
+    if (arch != CudaArch::Sm80) {
         for (int M = 2048 * 3; M <= 2048 * 6; M += 2048) {
             L1_square.sizes.push_back(GemmPlotSize{1, M, M, M});
         }
     }
     plots.push_back(L1_square);
     plots.push_back(L4_square);
+
+    fix_plot_names<Ctype, ABtype>(plots, arch);
     return plots;
 }
 
-std::vector<GemvPlotInput> generate_gemv_plot_inputs(bool is_h100)
+std::vector<GemvPlotInput> generate_gemv_plot_inputs(CudaArch arch)
 {
     GemvPlotInput plot_input{};
     plot_input.name = "gemv";
     plot_input.title = "GEMV, M=K";
     plot_input.x_axis = "M";
-    const int max_M = is_h100 ? 65536 : 8192;
+    const int max_M = arch != CudaArch::Sm80 ? 65536 : 8192;
     for (int m = 1024; m <= max_M; m *= 2) {
         plot_input.sizes.push_back({m, m});
         plot_input.sizes.push_back({m / 2 * 3, m / 2 * 3});
     }
-    return {plot_input};
 
+    std::vector<GemvPlotInput> plots = {plot_input};
+    fix_plot_names<float, float>(plots, arch);
+    return plots;
 }
 
 static void no_op_warn_if_no_json()
@@ -137,16 +159,17 @@ struct AsyncDeleter
     }
 };
 
-std::unique_ptr<float[], AsyncDeleter> alloc_f32(int L, int MN, int K, AsyncDeleter deleter)
+template <typename T>
+void init_alloc(std::unique_ptr<T[], AsyncDeleter>& out_ptr, int L, int MN, int K, AsyncDeleter deleter)
 {
-    size_t sz = sizeof(float) * size_t(L) * size_t(MN) * size_t(K);
+    size_t sz = sizeof(T) * size_t(L) * size_t(MN) * size_t(K);
     void* ptr = nullptr;
     cudaMallocAsync(&ptr, sz, deleter.stream);
     if (!ptr and sz > 0) {
         cudaError_t err = cudaGetLastError();
         throw std::runtime_error(cudaGetErrorString(err));
     }
-    return std::unique_ptr<float[], AsyncDeleter>(static_cast<float*>(ptr), deleter);
+    out_ptr = std::unique_ptr<T[], AsyncDeleter>(static_cast<T*>(ptr), deleter);
 }
 
 template <typename KernelCase>
@@ -175,14 +198,19 @@ std::vector<KernelCaseEntry<KernelCase>> generate_cases(
     case_permutations.clear();
     std::vector<KernelCaseEntry<KernelCase>> case_entries;
 
-    for (int case_i = 0; case_i < KernelCase::num_user_cases + KernelCase::num_builtin_cases; ++case_i) {
+    const std::vector<KernelCase>& user_cases = get_user_cases(KernelCase{});
+    const std::vector<KernelCase>& builtin_cases = get_builtin_cases(KernelCase{});
+    const int total_cases = int(user_cases.size() + builtin_cases.size());
+    const int num_user_cases = int(user_cases.size());
+
+    for (int case_i = 0; case_i < total_cases; ++case_i) {
         KernelCaseEntry<KernelCase> entry{};
-        if (case_i < KernelCase::num_user_cases) {
-            entry.p_case = &KernelCase::user_cases[case_i];
+        if (case_i < num_user_cases) {
+            entry.p_case = &user_cases[case_i];
             entry.is_builtin = false;
         }
         else {
-            entry.p_case = &KernelCase::builtin_cases[case_i - KernelCase::num_user_cases];
+            entry.p_case = &builtin_cases[case_i - num_user_cases];
             entry.is_builtin = true;
         }
 
@@ -287,11 +315,16 @@ void summarize_entry(const MainData& main_data, KernelCaseEntry<KernelCase>& ent
 }
 
 
-void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& plot_input)
+template <typename Ctype, typename ABtype>
+void generate_gemm_plot_samples(
+        const MainData& main_data,
+        const GemmPlotInput& plot_input,
+        const GemmCaseT<Ctype, ABtype>&)
 {
+    using KernelCase = GemmCaseT<Ctype, ABtype>;
     bool need_comma = false;
     std::vector<int> case_permutations;
-    std::vector<KernelCaseEntry<GemmCase>> gemm_case_entries = generate_cases<GemmCase>(
+    std::vector<KernelCaseEntry<KernelCase>> gemm_case_entries = generate_cases<KernelCase>(
             &case_permutations, main_data.cuda_cc_major, main_data.cuda_cc_minor);
 
     for (GemmPlotSize plot_size : plot_input.sizes) {
@@ -308,7 +341,7 @@ void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& 
         AsyncDeleter deleter{main_data.stream};
         int union_flags = 0;
         int union_not_flags = 0;
-        for (const KernelCaseEntry<GemmCase>& entry : gemm_case_entries) {
+        for (const KernelCaseEntry<KernelCase>& entry : gemm_case_entries) {
             const int flags = entry.p_case->flags;
             union_flags |= flags;
             union_not_flags |= ~flags;
@@ -316,30 +349,34 @@ void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& 
 
         printf("\n\x1b[34m\x1b[1mGEMM:\x1b[0m\n");
         printf("L = %i, MNK = [%i, %i, %i]\n", L, M, N, K);
-        std::unique_ptr<float[], AsyncDeleter> unique_L2_shred_memory = alloc_f32(1, 1, L2_shred_bytes / 4u, deleter);
-        std::unique_ptr<float[], AsyncDeleter> unique_C_test = alloc_f32(L, M, N, deleter);
-        std::unique_ptr<float[], AsyncDeleter> unique_C_expected = alloc_f32(L, M, N, deleter);
-        std::unique_ptr<float[], AsyncDeleter> unique_A_row_major;
-        std::unique_ptr<float[], AsyncDeleter> unique_B_row_major;
-        std::unique_ptr<float[], AsyncDeleter> unique_A_col_major;
-        std::unique_ptr<float[], AsyncDeleter> unique_B_col_major;
+        std::unique_ptr<char[], AsyncDeleter> unique_L2_shred_memory;
+        std::unique_ptr<Ctype[], AsyncDeleter> unique_C_test;
+        std::unique_ptr<Ctype[], AsyncDeleter> unique_C_expected;
+        std::unique_ptr<ABtype[], AsyncDeleter> unique_A_row_major;
+        std::unique_ptr<ABtype[], AsyncDeleter> unique_B_row_major;
+        std::unique_ptr<ABtype[], AsyncDeleter> unique_A_col_major;
+        std::unique_ptr<ABtype[], AsyncDeleter> unique_B_col_major;
+
+        init_alloc(unique_L2_shred_memory, 1, 1, L2_shred_bytes, deleter);
+        init_alloc(unique_C_test, L, M, N, deleter);
+        init_alloc(unique_C_expected, L, M, N, deleter);
 
         // Allocate A column major, or B row major, only if some test case requires it.
         // A row major, B column major is required by our usage of cublas to generate expected output.
         if (true) {
-            unique_A_row_major = alloc_f32(L, M, K, deleter);
+            init_alloc(unique_A_row_major, L, M, K, deleter);
         }
         if ((union_not_flags & A_row_major_flag)) {
-            unique_A_col_major = alloc_f32(L, M, K, deleter);
+            init_alloc(unique_A_col_major, L, M, K, deleter);
         }
         if ((union_flags & B_row_major_flag)) {
-            unique_B_row_major = alloc_f32(L, N, K, deleter);
+            init_alloc(unique_B_row_major, L, N, K, deleter);
         }
         if (true) {
-            unique_B_col_major = alloc_f32(L, N, K, deleter);
+            init_alloc(unique_B_col_major, L, N, K, deleter);
         }
 
-        GemmTestResources resources{};
+        GemmTestResourcesT<Ctype, ABtype> resources{};
         resources.cublasH = main_data.cublasH;
         resources.start_event = main_data.start_event;
         resources.end_event = main_data.end_event;
@@ -370,8 +407,8 @@ void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& 
             // Test kernels in a random order.
             shuffle_ints(case_permutations, trial_i + 27182818, M * N);
             for (auto entry_index : case_permutations) {
-                KernelCaseEntry<GemmCase>& entry = gemm_case_entries.at(entry_index);
-                const GemmCase& gemm_case = *entry.p_case;
+                KernelCaseEntry<KernelCase>& entry = gemm_case_entries.at(entry_index);
+                const KernelCase& gemm_case = *entry.p_case;
                 const int K_split = entry.K_split;
                 GemmSize size{};
                 size.L = L;
@@ -399,7 +436,7 @@ void generate_gemm_plot_samples(const MainData& main_data, const GemmPlotInput& 
         }
         fprintf(stderr, "\n");
 
-        for (KernelCaseEntry<GemmCase>& entry: gemm_case_entries) {
+        for (KernelCaseEntry<KernelCase>& entry: gemm_case_entries) {
             summarize_entry(main_data, entry, &entry == &gemm_case_entries[0]);
 
             // Clear flops samples vector for the next problem size.
@@ -432,6 +469,12 @@ void generate_gemv_plot_samples(const MainData& main_data, const GemvPlotInput& 
         printf("\n\x1b[34m\x1b[1mGEMV:\x1b[0m\n");
         printf("MK = [%i, %i]\n", M, K);
 
+        auto alloc_f32 = [] (int L, int MN, int K, AsyncDeleter deleter)
+        {
+            std::unique_ptr<float[], AsyncDeleter> ptr;
+            init_alloc(ptr, L, MN, K, deleter);
+            return ptr;
+        };
         std::unique_ptr<float[], AsyncDeleter> unique_L2_shred_memory = alloc_f32(1, 1, L2_shred_bytes / 4u, deleter);
         std::unique_ptr<float[], AsyncDeleter> unique_A = alloc_f32(L, M, K, deleter);
         std::unique_ptr<float[], AsyncDeleter> unique_x = alloc_f32(L, 1, K, deleter);
@@ -518,8 +561,15 @@ int Main(int argc, char** argv)
     cudaSetDevice(0);
     cudaDeviceGetAttribute(&main_data.cuda_cc_major, cudaDevAttrComputeCapabilityMajor, 0);
     cudaDeviceGetAttribute(&main_data.cuda_cc_minor, cudaDevAttrComputeCapabilityMinor, 0);
-    const bool is_h100 = main_data.cuda_cc_major == 9 && main_data.cuda_cc_minor == 0;
-    fprintf(stderr, "is_h100: %i\n", is_h100);
+    CudaArch arch = CudaArch::Sm80;
+    if (cuda_arch_supports(CudaArch::Sm90a, main_data.cuda_cc_major, main_data.cuda_cc_minor)) {
+        arch = CudaArch::Sm90a;
+    }
+    if (cuda_arch_supports(CudaArch::Sm100a, main_data.cuda_cc_major, main_data.cuda_cc_minor)) {
+        arch = CudaArch::Sm100a;
+    }
+    const char* p_arch_name = arch_name(arch);
+    fprintf(stderr, "CudaArch::%s\n", p_arch_name);
 
     if (const cudaError_t err = cudaEventCreate(&main_data.start_event)) {
         throw std::runtime_error("cudaEventCreate failed\n");
@@ -538,10 +588,9 @@ int Main(int argc, char** argv)
     {
         fprintf(
                 main_data.json_file,
-                " %c{\"name\": \"%s\", \"title\": \"%s %s\", \"x_axis\": \"%s\", \"samples\": [\n",
+                " %c{\"name\": \"%s\", \"title\": \"%s\", \"x_axis\": \"%s\", \"samples\": [\n",
                 need_comma ? ',' : ' ',
                 plot_input.name.c_str(),
-                is_h100 ? "sm_90a" : "sm_80",
                 plot_input.title.c_str(),
                 plot_input.x_axis.c_str()
         );
@@ -552,19 +601,30 @@ int Main(int argc, char** argv)
         fprintf(main_data.json_file, "  ]}\n");
     };
 
-    if (GemmCase::num_user_cases > 0) {
-        for (const GemmPlotInput& plot_input : generate_gemm_plot_inputs(is_h100)) {
-            begin_json_plot_object(plot_input);
-            generate_gemm_plot_samples(main_data, plot_input);
-            end_json_plot_object();
+    auto typed_gemm_helper = [&] (auto kernel_case) {
+        if (!get_user_cases(kernel_case).empty()) {
+            for (const GemmPlotInput& plot_input : generate_gemm_plot_inputs(arch, kernel_case)) {
+                begin_json_plot_object(plot_input);
+                generate_gemm_plot_samples(main_data, plot_input, kernel_case);
+                end_json_plot_object();
+            }
         }
-    }
-    else {
-        fprintf(stderr, "No user GemmCase instances, skipping...\n");
-    }
+        else {
+            fprintf(
+                stderr,
+                "No user GemmCase_%s_%s instances, skipping...\n",
+                kernel_case.c_type_name(),
+                kernel_case.ab_type_name()
+            );
+        }
+    };
+    static_assert(std::variant_size_v<GemmCaseUnion> == 3);
+    typed_gemm_helper(GemmCase_f32_f32{});
+    typed_gemm_helper(GemmCase_f32_f16{});
+    typed_gemm_helper(GemmCase_f16_f16{});
 
-    if (GemvCase::num_user_cases > 0) {
-        for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs(is_h100)) {
+    if (!get_user_cases(GemvCase{}).empty()) {
+        for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs(arch)) {
             begin_json_plot_object(plot_input);
             generate_gemv_plot_samples(main_data, plot_input);
             end_json_plot_object();

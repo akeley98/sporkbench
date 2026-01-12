@@ -44,6 +44,9 @@ These JSON files must contain a list of objects (`dict`) of the format:
         "C_major": str  # gemm only, "row" or "col"
         f"{arg}_max": int  # (optional) maximum supported value for {arg} (e.g. K_max)
         f"{arg}_divisor": int  # (optional) this must divide {arg} (e.g. K_divisor)
+        "A_type": str  # "f16" or "f32", gemm only
+        "B_type": str  # "f16" or "f32", gemm only
+        "C_type": str  # "f16" or "f32", gemm only
     }
 
 For gemv, the args must be some permutation of `["M", "K", "A", "x", "y"]`

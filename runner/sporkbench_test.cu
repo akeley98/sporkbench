@@ -216,16 +216,20 @@ bool launch_device_compare_tensor(
 }
 
 
+template <typename Ctype, typename ABtype>
 double run_gemm_case_impl(
-        const GemmCase& gemm_case, const GemmTestResources& resources, GemmSize size, cudaStream_t stream)
+        const GemmCaseT<Ctype, ABtype>& gemm_case,
+        const GemmTestResourcesT<Ctype, ABtype>& resources,
+        GemmSize size,
+        cudaStream_t stream)
 {
     const uint32_t L = uint32_t(size.L);
     const uint32_t M = uint32_t(size.M);
     const uint32_t N = uint32_t(size.N);
     const uint32_t K = uint32_t(size.K_split * size.K_cluster);
-    const float* A = (gemm_case.flags & A_row_major_flag) ? resources.A_row_major : resources.A_col_major;
+    const ABtype* A = (gemm_case.flags & A_row_major_flag) ? resources.A_row_major : resources.A_col_major;
     assert(A);
-    const float* B = (gemm_case.flags & B_row_major_flag) ? resources.B_row_major : resources.B_col_major;
+    const ABtype* B = (gemm_case.flags & B_row_major_flag) ? resources.B_row_major : resources.B_col_major;
     assert(B);
 
     cudaMemsetAsync(resources.L2_shred_memory, 0xCC, resources.L2_shred_bytes, stream);
@@ -263,7 +267,12 @@ double run_gemv_case_impl(
 
 }  // end namespace sporkbench_test
 
-void init_test_data(const GemmTestResources& resources, GemmSize size, TestDataCode A_code, TestDataCode B_code)
+template <typename Ctype, typename ABtype>
+void init_test_data_impl(
+        const GemmTestResourcesT<Ctype, ABtype>& resources,
+        GemmSize size,
+        TestDataCode A_code,
+        TestDataCode B_code)
 {
     using namespace ::sporkbench::sporkbench_test;
     const cudaStream_t stream = 0;
@@ -289,10 +298,17 @@ void init_test_data(const GemmTestResources& resources, GemmSize size, TestDataC
     run_cublas_gemm(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected);
 }
 
-TestResult run_gemm_case(
-        const GemmCase& gemm_case, const GemmTestResources& resources, GemmSize size, TestCheckMode check_mode)
+template <typename Ctype, typename ABtype>
+TestResult gemm_case_visitor_impl(
+        const GemmCaseT<Ctype, ABtype>& gemm_case,
+        const GemmTestResourcesUnion& resources_union,
+        GemmSize size,
+        TestCheckMode check_mode)
 {
     using namespace ::sporkbench::sporkbench_test;
+    using Resources = GemmTestResourcesT<Ctype, ABtype>;
+    const Resources resources = std::get<Resources>(resources_union);
+
     const cudaStream_t stream = 0;
 
     // Fill output C matrices with garbage.
@@ -319,6 +335,25 @@ TestResult run_gemm_case(
     result.flops = flops;
     result.passed = passed;
     return result;
+}
+
+void init_test_data(GemmTestResourcesUnion resources, GemmSize size, TestDataCode A_code, TestDataCode B_code)
+{
+    auto visitor = [&] (auto typed_resources)
+    {
+        init_test_data_impl(typed_resources, size, A_code, B_code);
+    };
+    return std::visit(visitor, resources);
+}
+
+TestResult run_gemm_case(
+        GemmCaseUnion gemm_case, GemmTestResourcesUnion resources, GemmSize size, TestCheckMode check_mode)
+{
+    auto visitor = [&] (const auto& gemm_case)
+    {
+        return gemm_case_visitor_impl(gemm_case, resources, size, check_mode);
+    };
+    return std::visit(visitor, gemm_case);
 }
 
 void init_test_data(const GemvTestResources& resources, GemvSize size, TestDataCode A_code, TestDataCode B_code)

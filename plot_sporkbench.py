@@ -30,8 +30,9 @@ def plot(j_plot, output_dir_name):
     plt.title(title)
     ax = fig.gca()
 
-    want_peak = "sm_90a" in title
-    if want_peak:
+    want_peak = False
+    if "sm_90a" in title:
+        want_peak = True
         if "GEMM" in title:
             h100_peak_flops = 494.5e+12
         elif "GEMV" in title:
@@ -40,6 +41,8 @@ def plot(j_plot, output_dir_name):
         else:
             assert 0, "implement peak"
         ax2 = ax.twinx()
+    if "sm_100a" in title:
+        assert 0, "TODO fill in peak performance info"
 
     j_raw_samples = j_plot["samples"]
     if j_raw_samples:
