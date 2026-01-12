@@ -17,5 +17,6 @@ for p in (gemm_m1n1, gemm_m2n1, gemm_m1n2, gemm_m2n2):
         "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
         "K_split_max": 0x7fffffff if config.enable_split_k else 1,
         "A_major": "row", "B_major": "col", "C_major": "col",
+        "A_type": "f32", "B_type": "f32", "C_type": "f32",
     })
 

@@ -263,6 +263,7 @@ def add_case_helper(p: exo.Procedure):
         "K_split_max": 0x7fffffff if config.enable_split_k else 1,
         "A_major": "row", "B_major": "col", "C_major": "col",
         "M_divisor": M_divisor, "N_divisor": N_divisor, "K_cluster_divisor": config.smem_K,
+        "A_type": "f32", "B_type": "f32", "C_type": "f32",
     })
 
 
