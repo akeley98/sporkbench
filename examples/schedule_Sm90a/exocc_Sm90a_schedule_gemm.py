@@ -347,6 +347,11 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     inner_task_loop = gemm.forward(inner_task_loop)
     assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
     if enable_split_k:
+        # NB we are not yet ready to schedule enable_split_k=True
+        # Here I'm trying to stage the tile in C_smem, which will be accumulated into
+        # C_tensorMap. Problem is this causes C_smem to be zero'd, then +='d.
+        # We need to reason that this can be fused to a simple assignment.
+        assert 0
         consumer_epilogue_assign = assign_sub_wg_m_loop.parent().parent()
         print(consumer_epilogue_assign)
         gemm = stage_mem(gemm, consumer_epilogue_assign,
