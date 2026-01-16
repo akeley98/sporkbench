@@ -1,3 +1,5 @@
+# fmt: off
+
 from __future__ import annotations
 
 from .Sm90a_gemm_pre_config import config, Sm90aGemmConfig
@@ -19,4 +21,3 @@ for p in (gemm_m1n1, gemm_m2n1, gemm_m1n2, gemm_m2n2):
         "A_major": "row", "B_major": "col", "C_major": "col",
         "A_type": "f32", "B_type": "f32", "C_type": "f32",
     })
-

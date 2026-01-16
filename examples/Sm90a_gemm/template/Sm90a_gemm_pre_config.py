@@ -1,3 +1,5 @@
+# fmt: off
+
 from dataclasses import dataclass
 
 # Usage:

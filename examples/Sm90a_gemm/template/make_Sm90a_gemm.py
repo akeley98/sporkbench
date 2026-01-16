@@ -1,3 +1,14 @@
+# fmt: off
+"""
+
+DO NOT EDIT if you are in the Exo repository
+
+Edit if you are in sporkbench
+
+For now I'm planning to copy/paste the sporkbench dir into Exo.
+
+"""
+
 from __future__ import annotations
 
 import time
