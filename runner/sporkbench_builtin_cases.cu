@@ -5,6 +5,7 @@
 #include <stdio.h>
 
 #include "sporkbench_cutlass_Sm80.hpp"
+#include "sporkbench_cutlass_Sm100a.hpp"
 
 namespace sporkbench {
 
@@ -136,6 +137,7 @@ const std::vector<GemmCaseT<Ctype, ABtype>>& get_builtin_cases_gemm_impl(const G
         1, INT32_MAX,  // K_cluster
       },
       make_cutlass_Sm80_GemmCase(Ctype{}, ABtype{}),
+      make_cutlass_Sm100a_GemmCase(Ctype{}, ABtype{}),
     };
     return result;
 }

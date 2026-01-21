@@ -52,10 +52,12 @@ except FileExistsError:
 class RunnerSource:
     cu: str
     o: str
+    arch: str
 
 
 # Scan for all .cpp and .cu files in the runner/ directory
 # These will be compiled in the user's bin_dir/sporkbench_runner
+# Hacked in undocumented platform detection after-the-fact...
 runner_sources: List[RunnerSource] = []
 runner_src_dir = os.path.join(sporkbench_dir, "runner")
 runner_bin_dir = os.path.join(bin_dir, "sporkbench_runner")
@@ -65,7 +67,15 @@ for dname, _, fnames in os.walk(runner_src_dir):
             full_path = os.path.join(dname, fname)
             rel_dir = os.path.relpath(dname, runner_src_dir)
             o_path = os.path.join(os.path.join(runner_bin_dir, rel_dir), fname + ".o")
-            runner_sources.append(RunnerSource(full_path, o_path))
+            arch = "Sm80"
+            if "Sm" in fname:
+                for fragment in ("Sm80", "Sm90a", "Sm100a"):
+                    if fragment in fname:
+                        arch = fragment
+                        break
+                else:
+                    raise ValueError(full_path + ": Couldn't detect Sm80, Sm90a, or Sm100a")
+            runner_sources.append(RunnerSource(full_path, o_path, arch))
             print(f"\x1b[1m\x1b[34mrunner:\x1b[0m {full_path}")
 
 
@@ -91,8 +101,10 @@ for dname, _, fnames in os.walk(exocc_src_dir, followlinks=True):
                 arch = "Sm80"
             elif fname.startswith("exocc_Sm90a_"):
                 arch = "Sm90a"
+            elif fname.startswith("exocc_Sm100a_"):
+                arch = "Sm100a"
             else:
-                raise ValueError(f"Must start with exocc_Sm80_, or exocc_Sm90a_: {full_path}")
+                raise ValueError(f"Must start with exocc_Sm80_, or exocc_Sm90a_, or exocc_Sm100a_: {full_path}")
             for c in full_path:
                 if ord(c) <= ord(' ') or c == '$':
                     warn(f"{c!r} in {full_path!r}")
@@ -106,8 +118,9 @@ build = open(build_path, "w")
 
 # Write nvcc build rules
 build.write(f"""\
+archcode80 = -arch compute_80 -code sm_80,sm_90a,sm_100a,compute_80
 archcode90a = -arch compute_90a -code sm_90a,compute_90a
-archcode80 = -arch compute_80 -code sm_80,sm_90a,compute_80
+archcode100a = -arch compute_100a -code sm_100a,compute_100a
 nvcc_bin = {Qarg(nvcc)}
 cxx = {Qarg(cxx)}
 exocc = {Qarg(exocc)}
@@ -123,6 +136,10 @@ rule nvcc_Sm80
 
 rule nvcc_Sm90a
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a $in -o $out -MD -MF $out.d
+  depfile = $out.d
+
+rule nvcc_Sm100a
+  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode100a $in -o $out -MD -MF $out.d
   depfile = $out.d
 
 rule link
@@ -162,7 +179,8 @@ for i, src_info in enumerate(exocc_sources):
 # Write CUDA -> .o builds for the runner itself.
 build.write("\n")
 for src_info in runner_sources:
-    build.write(f"build {Qpath(src_info.o)}: nvcc_Sm80 {Qpath(src_info.cu)}\n")
+    arch = src_info.arch
+    build.write(f"build {Qpath(src_info.o)}: nvcc_{arch} {Qpath(src_info.cu)}\n")
 
 
 # Write JSON-to-C build
