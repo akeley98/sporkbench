@@ -399,4 +399,7 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
 
     gemm = simplify(gemm)
     print(gemm)
+
+    # TODO test cursors
+
     return gemm
