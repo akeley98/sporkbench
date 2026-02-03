@@ -351,13 +351,20 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N, cases=None):
     assign_sub_wg_m_loop = C_assign.parent().parent().parent().parent()  # TODO better way?
     assign_wg_m_loop = assign_sub_wg_m_loop.parent()
     gemm = insert_await(gemm, assign_wg_m_loop.body().before(), "cg[cta_m, cta_n, wg_m]", cuda_in_order, 0)
-    gemm = wrap_with_context(gemm, assign_wg_m_loop, CudaWarps(name="consumer"))
     assign_wg_m_loop = gemm.forward(assign_wg_m_loop)
     epilogue_gap = assign_wg_m_loop.body()[0].after()
     # TODO: is there a better way to set n_lifts?
-    gemm = fission(gemm, epilogue_gap, n_lifts=4)
+    epilogue_lifts = 3
+    gemm = fission(gemm, epilogue_gap, n_lifts=epilogue_lifts)
+    epilogue_gap = gemm.forward(epilogue_gap)
+    wgmma_wait_loop = epilogue_gap.anchor()
+    for i in range(0, epilogue_lifts):
+        wgmma_wait_loop = wgmma_wait_loop.parent()
     inner_task_loop = gemm.forward(inner_task_loop)
     assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
+
+    # Wrap wgmma wait with CudaWarps(name="consumer")
+    gemm = wrap_with_context(gemm, wgmma_wait_loop, CudaWarps(name="consumer"))
 
     assert enable_split_k == config.tma_to_gmem, "currently support TMA-to-gmem iff split-k"
 
@@ -381,16 +388,12 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N, cases=None):
         gemm = expand_dim(gemm, C_smem, ncta_N, "cta_n")
         gemm = expand_dim(gemm, C_smem, ncta_M, "cta_m")
         gemm = simplify(gemm)
-        gemm = lift_alloc(gemm, C_smem, n_lifts=4)  # 3 loops + CudaWarps
+        gemm = lift_alloc(gemm, C_smem, n_lifts=3)
 
-        # Each warpgroup calls Sm90_mma_store_d_col_major_tf32.
         # C_smem has to be reordered to column major,
         # and we fuse the wg_m and sub_wg_m dims.
         gemm = mult_dim(gemm, C_smem, 2, 3)
         gemm = rearrange_dim(gemm, C_smem, [0, 1, 3, 2])
-        gemm = add_if(gemm, C_smem_init.only_child(1), f"i0 < {wg_M}", True)
-        gemm = add_if(gemm, C_smem_init.only_child(2), f"i1 < {smem_N}", True)
-        gemm = replace(gemm, C_smem_init, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=smem_N))
 
         # The original C_tensorMap += ... loop must be replaced with TMA.
         # This requires fusing away the wg_m loop and unsafely removing the ifs.
@@ -412,17 +415,22 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N, cases=None):
         ))
         tma_to_gmem = gemm.forward(tma_to_gmem)
 
-        # Each CTA assigns one warp to do the TMA, and syncs before and after it.
+        # Each consumer warpgroup calls Sm90_mma_store_d_col_major_tf32.
+        gemm = add_if(gemm, C_smem_init.only_child(1), f"i0 < {wg_M}", True)
+        gemm = add_if(gemm, C_smem_init.only_child(2), f"i1 < {smem_N}", True)
+        gemm = replace(gemm, C_smem_init, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=smem_N))
+        C_smem_init = gemm.forward(C_smem_init)
+        gemm = wrap_with_context(gemm, C_smem_init.parent(), CudaWarps(name="consumer"))
+
+        # Each CTA assigns the producer warp to do the TMA, and syncs before and after it.
         # The Fence has to be outside the with CudaWarps, hence the fissioning.
         # NB this is where we rely on the fact that (with = if) under the hood.
-        gemm = fission(gemm, tma_to_gmem.before())
         tma_to_gmem = gemm.forward(tma_to_gmem)
-        tma_to_gmem_cta_gap = tma_to_gmem.parent().before()  # Just before the new CudaWarps
         gemm = insert_barrier_alloc(gemm, tma_to_gmem.before(), "tma_cg", None, [], CudaCommitGroup)
-        gemm = insert_fence(gemm, tma_to_gmem_cta_gap, cuda_in_order, cuda_generic_and_async_proxy)
-        gemm = wrap_with_context(gemm, tma_to_gmem, CudaWarps(0, 1))
-        gemm = insert_await(gemm, tma_to_gmem.after(), "tma_cg", cuda_in_order, 0)
+        gemm = insert_fence(gemm, tma_to_gmem.before(), cuda_in_order, cuda_generic_and_async_proxy)
+        gemm = wrap_with_context(gemm, tma_to_gmem, CudaWarps(name="producer"))
         tma_to_gmem = gemm.forward(tma_to_gmem)
+        gemm = insert_await(gemm, tma_to_gmem.after(), "tma_cg", cuda_in_order, 0)
         gemm = insert_arrive(gemm, tma_to_gmem.after(), tma_to_gmem_async, "tma_cg")
 
         # We need cluster syncs before and after the C_smem usage to protect the
@@ -431,7 +439,10 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N, cases=None):
         gemm = insert_fence(gemm, inner_task_loop.body().after(), cuda_in_order, cuda_in_order)
     else:
         gemm = replace(gemm, assign_sub_wg_m_loop, Sm90_mma_store_d_col_major_tf32)
-        # Surround store_d loop with cluster arrive/await
+        # Surround store_d loop with cluster arrive/await and with CudaWarps
+        assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
+        assert assign_sub_wg_m_loop.parent().loop_mode().unit == cuda_warpgroup
+        gemm = wrap_with_context(gemm, assign_sub_wg_m_loop.parent(), CudaWarps(name="consumer"))
         inner_task_loop = gemm.forward(inner_task_loop)
         cluster_arrive_here = inner_task_loop.body().after().anchor().before()
         gemm = insert_barrier_alloc(gemm, cluster_arrive_here, "cluster_sync", None, [], CudaClusterSync)
