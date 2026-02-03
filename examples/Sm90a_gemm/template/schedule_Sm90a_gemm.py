@@ -21,7 +21,7 @@ from exo.platforms.Sm90 import *
 
 from .Sm90a_gemm_pre_config import Sm90aGemmConfig
 
-def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
+def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N, cases=None):
     unsafe = False
     enable_split_k = config.enable_split_k
     smem_M = config.smem_M
@@ -358,27 +358,75 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
     gemm = fission(gemm, epilogue_gap, n_lifts=4)
     inner_task_loop = gemm.forward(inner_task_loop)
     assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
+
+    assert enable_split_k == config.tma_to_gmem, "currently support TMA-to-gmem iff split-k"
+
     if enable_split_k:
-        # NB we are not yet ready to schedule enable_split_k=True
-        # Here I'm trying to stage the tile in C_smem, which will be accumulated into
-        # C_tensorMap. Problem is this causes C_smem to be zero'd, then +='d.
-        # We need to reason that this can be fused to a simple assignment.
-        assert 0
-        consumer_epilogue_assign = assign_sub_wg_m_loop.parent().parent()
-        print(consumer_epilogue_assign)
-        gemm = stage_mem(gemm, consumer_epilogue_assign,
-            f"C_tensorMap[batch, "
-            f"(task_n * {ncta_N} + cta_n) * {smem_N} : (task_n * {ncta_N} + cta_n + 1) * {smem_N}, "
-            f"(task_m * {ncta_M} + cta_m) * {smem_M} : (task_m * {ncta_M} + cta_m + 1) * {smem_M}]",
+        # Replace C_tensorMap += D_rmem with
+        # C_smem = D_rmem; C_tensorMap += C_smem
+        # NB temporarily, the SMEM is at warpgroup scope.
+        gemm = stage_mem(gemm, assign_sub_wg_m_loop,
+            f"D_rmem[cta_m, cta_n, wg_m, 0:{wg_M}, 0:{smem_N}]",
             "C_smem",
-            True,  # accum
+            False,  # accum
             CudaSmemLinear,
         )
+        # This is not great, should have stage_mem give back cursors.
         C_smem = gemm.find_alloc_or_arg("C_smem")
+        C_smem_init = C_smem.next()
+
+        # Expand and lift C_smem from warpgroup to cluster scope.
+        C_smem = gemm.forward(C_smem)
+        gemm = expand_dim(gemm, C_smem, 2, "wg_m")
         gemm = expand_dim(gemm, C_smem, ncta_N, "cta_n")
         gemm = expand_dim(gemm, C_smem, ncta_M, "cta_m")
         gemm = simplify(gemm)
-        gemm = lift_alloc(gemm, C_smem, n_lifts=2)
+        gemm = lift_alloc(gemm, C_smem, n_lifts=4)  # 3 loops + CudaWarps
+
+        # Each warpgroup calls Sm90_mma_store_d_col_major_tf32.
+        # C_smem has to be reordered to column major,
+        # and we fuse the wg_m and sub_wg_m dims.
+        gemm = mult_dim(gemm, C_smem, 2, 3)
+        gemm = rearrange_dim(gemm, C_smem, [0, 1, 3, 2])
+        gemm = add_if(gemm, C_smem_init.only_child(1), f"i0 < {wg_M}", True)
+        gemm = add_if(gemm, C_smem_init.only_child(2), f"i1 < {smem_N}", True)
+        gemm = replace(gemm, C_smem_init, Sm90_mma_store_d_col_major_tf32(M=wg_M, N=smem_N))
+
+        # The original C_tensorMap += ... loop must be replaced with TMA.
+        # This requires fusing away the wg_m loop and unsafely removing the ifs.
+        assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
+        gemm = fission(gemm, assign_sub_wg_m_loop.before())
+        assign_sub_wg_m_loop = gemm.forward(assign_sub_wg_m_loop)
+        tma_to_gmem = assign_sub_wg_m_loop.parent()
+        gemm = mult_loops(gemm, tma_to_gmem, "sub_cta_m")
+        gemm = unsafe_remove_if(gemm, tma_to_gmem, recursive=True)
+        tma_to_gmem = gemm.forward(tma_to_gmem)
+        # Exchange M/N loops, then recover cursor to top (now N) loop.
+        gemm = reorder_loops(gemm, tma_to_gmem)
+        tma_to_gmem = gemm.forward(tma_to_gmem).parent()
+        gemm = simplify(gemm)
+        gemm = replace(gemm, tma_to_gmem, Sm90_reduce_tensor_to_gmem_linear_2f32(
+            size0=smem_N,  # Column major, N then M.
+            size1=smem_M,
+            smem_box=smem_box_C,
+        ))
+        tma_to_gmem = gemm.forward(tma_to_gmem)
+
+        # Each CTA assigns one warp to do the TMA, and syncs before and after it.
+        # The Fence has to be outside the with CudaWarps, hence the fissioning.
+        # NB this is where we rely on the fact that (with = if) under the hood.
+        gemm = fission(gemm, tma_to_gmem.before())
+        tma_to_gmem = gemm.forward(tma_to_gmem)
+        tma_to_gmem_cta_gap = tma_to_gmem.parent().before()  # Just before the new CudaWarps
+        gemm = insert_barrier_alloc(gemm, tma_to_gmem.before(), "tma_cg", None, [], CudaCommitGroup)
+        gemm = insert_fence(gemm, tma_to_gmem_cta_gap, cuda_in_order, cuda_generic_and_async_proxy)
+        gemm = wrap_with_context(gemm, tma_to_gmem, CudaWarps(0, 1))
+        gemm = insert_await(gemm, tma_to_gmem.after(), "tma_cg", cuda_in_order, 0)
+        tma_to_gmem = gemm.forward(tma_to_gmem)
+        gemm = insert_arrive(gemm, tma_to_gmem.after(), tma_to_gmem_async, "tma_cg")
+
+        # We need cluster syncs before and after the C_smem usage to protect the
+        # allocation aliasing with prior SMEM allocs.
         gemm = insert_fence(gemm, C_smem.before(), cuda_in_order, cuda_in_order)
         gemm = insert_fence(gemm, inner_task_loop.body().after(), cuda_in_order, cuda_in_order)
     else:
@@ -402,7 +450,24 @@ def schedule_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M, ncta_N):
         gemm = cut_loop(gemm, iter_k_loop, 1)
 
     gemm = simplify(gemm)
-    print(gemm)
+    proc_name = config.make_proc_name(ncta_M, ncta_N)
+    gemm = rename(gemm, proc_name)
+    gemm.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=2 if enable_split_k else 1)
+
+    # sporkbench cases
+    if cases is not None:
+        j_case = {
+            "algorithm": "gemm",
+            "A_type": "f32",
+            "B_type": "f32",
+            "C_type": "f32",
+            "proc": proc_name,
+            "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
+            "A_major": "row", "B_major": "col", "C_major": "col",
+        }
+        if not enable_split_k:
+            j_case["K_split_max"] = 1
+        cases.append(j_case)
 
     # TODO test cursors
 
