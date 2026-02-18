@@ -80,6 +80,7 @@ def plot(j_plot, output_dir_name):
 
     exo_specialized_label = "Exo-GPU (specialized)"
     exo_split_k_label = "Exo-GPU (K_split > 1)"
+    exo_pingpong_label = "Exo-GPU (pingpong)"
 
     # Plot each built-in kernel separately.
     # Plot the max of all user kernels (specialized).
@@ -104,6 +105,8 @@ def plot(j_plot, output_dir_name):
                 labels = (exo_specialized_label, )
             if j_kernel.get("K_split", 1) > 1:
                 labels = labels + (exo_split_k_label, )
+            if "pingpong" in j_kernel["proc"]:
+                labels = labels + (exo_pingpong_label, )
             for label in labels:
                 y_per_sample = labels_y.get(label)
                 if y_per_sample is None:
@@ -118,11 +121,13 @@ def plot(j_plot, output_dir_name):
     # We will always plot exo first
     def sort_key(nm):
         if nm == exo_specialized_label:
-            i = -2
+            i = -3
         elif nm == exo_split_k_label:
+            i = -2
+        elif nm == exo_pingpong_label:
             i = -1
         elif nm.startswith("Exo-GPU ("):
-            i = -3
+            i = -4
         else:
             i = 0
         return (i, nm)
@@ -135,6 +140,9 @@ def plot(j_plot, output_dir_name):
             marker = 'o'
         elif label == exo_split_k_label:
             color = "#60A000"
+            marker = '|'
+        elif label == exo_pingpong_label:
+            color = "#A000FF"
             marker = '|'
         elif label.startswith("Exo-GPU ("):
             color = "gray"
