@@ -22,9 +22,12 @@ class Sm90aGemmConfig:
     RING: int = 4
     tma_to_gmem: bool = None
     enable_split_k: bool = None
+    ping_pong: bool = False
 
     def make_proc_name(self, ncta_M: int, ncta_N: int) -> str:
         suffix = "rmemC" if not self.tma_to_gmem else "splitK" if self.enable_split_k else "tmaC"
+        if self.ping_pong:
+            suffix += "_pingpong"
         return f"xgemm_Sm90a_r{self.RING}_m{ncta_M}n{ncta_N}_m{self.smem_M}n{self.smem_N}_{suffix}"
 
 config = Sm90aGemmConfig()
