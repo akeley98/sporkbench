@@ -237,8 +237,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
     xgemm_Sm90_wgmma = simplify(xgemm_Sm90_wgmma)
     K_split = 2 if enable_split_k else 1
     t = time.time()
-    if ping_pong:
-        xgemm_Sm90_wgmma._hack_no_smem_free_check = True
+    # if ping_pong:
+    #     xgemm_Sm90_wgmma._hack_no_smem_free_check = True
     xgemm_Sm90_wgmma.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
     dt = time.time() - t
     print("%.3f s, %s" % (dt, xgemm_Sm90_wgmma.name()))
