@@ -91,6 +91,10 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
             for task_k in cuda_tasks(0, K_split):
               for task_n in cuda_tasks(0, (N + cluster_N - 1) / cluster_N):
                 for task_m in cuda_tasks(0, (M + cluster_M - 1) / cluster_M):
+                    # For ping-pong TMA case only.
+                    # Must be declared early to avoid aliasing with A_smem, B_smem.
+                    ping_C: f32[ncta_M, ncta_N, tile_N, tile_M] @ CudaSmemLinear
+
                     D_rmem : f32[ncta_M, ncta_N, 2, wg_M, wg_N] @ Sm90_RmemMatrixD(wg_M, wg_N)
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -172,8 +176,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                 for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                     Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 0)
 
-                    if tma_to_gmem:
-                        # Currently not supporting ping-pong
+                    if tma_to_gmem and cooperative:
                         Fence(cuda_in_order, cuda_in_order)
                         C_smem: f32[ncta_M, ncta_N, tile_N, tile_M] @ CudaSmemLinear
                         for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -198,8 +201,10 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                         Sm90_copy_tensor_to_gmem_linear_2f32(
                                             C_tensorMap[
                                                 batch,
-                                                (ncta_N*task_n + cta_n) * tile_N: (ncta_N*task_n + cta_n) * tile_N + tile_N,
-                                                (ncta_M*task_m + cta_m) * tile_M: (ncta_M*task_m + cta_m) * tile_M + tile_M],
+                                                (ncta_N*task_n + cta_n) * tile_N:
+                                                (ncta_N*task_n + cta_n) * tile_N + tile_N,
+                                                (ncta_M*task_m + cta_m) * tile_M:
+                                                (ncta_M*task_m + cta_m) * tile_M + tile_M],
                                             C_smem[cta_m, cta_n, :, :],
                                             size0=tile_N, size1=tile_M, smem_box=smem_box_C,
                                         )
@@ -207,6 +212,55 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                     Arrive(tma_to_gmem_async) >> tma_cg
                                     Await(tma_cg, cuda_in_order, 0)
                         Fence(cuda_in_order, cuda_in_order)  # cluster scope
+                    elif tma_to_gmem and ping_pong:
+                        for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
+                            for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
+                                with CudaWarps(name="consumer"):
+                                    _0to1: barrier @ CudaMbarrier
+                                    _1to0: barrier(_0to1) @ CudaMbarrier
+
+                                    # Breaks sync-check:
+                                    # These Await(s) need to be inside the wg_m loop.
+                                    # Currently Await(_1to0) happens "before" Arrive >> _1to0
+                                    # which should be a "no forward progress guarantee" error anyway.
+                                    # Regardless, SMEM free check wouldn't have passed anyway
+                                    # due to cluster-wide overapproximation.
+                                    with CudaWarps(0, 4, name="consumer"):
+                                        Await(_1to0, cuda_in_order, ~1)
+                                    with CudaWarps(4, 8, name="consumer"):
+                                        Await(_0to1, cuda_in_order, ~0)
+
+                                    for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
+                                        Sm90_mma_store_d_col_major_tf32(
+                                            wg_M, wg_N, ping_C[cta_m, cta_n, :, :], D_rmem[cta_m, cta_n, wg_m,:,:],
+                                            M=wg_M, N=wg_N
+                                        )
+                                        # One warp waits for above SMEM write to finish,
+                                        # then uses TMA to copy to GMEM. Signal cross-warpgroup
+                                        # barrier afterwards so other warpgroup can use ping_C.
+                                        intra_wg: barrier @ CudaMbarrier
+                                        Arrive(cuda_in_order) >> intra_wg
+                                        Await(intra_wg, cuda_generic_and_async_proxy, ~0)
+                                        with CudaWarps(0, 1, name="consumer"):
+                                            Sm90_copy_tensor_to_gmem_linear_2f32(
+                                                C_tensorMap[
+                                                    batch,
+                                                    (ncta_N*task_n + cta_n) * tile_N:
+                                                    (ncta_N*task_n + cta_n) * tile_N + tile_N,
+                                                    (2*ncta_M*task_m + 2*cta_m + wg_m) * tile_M:
+                                                    (2*ncta_M*task_m + 2*cta_m + wg_m) * tile_M + tile_M],
+                                                ping_C[cta_m, cta_n, :, :],
+                                                size0=tile_N, size1=tile_M, smem_box=smem_box_C,
+                                            )
+
+                                            tma_cg: barrier @ CudaCommitGroup
+                                            Arrive(tma_to_gmem_async) >> tma_cg
+                                            Await(tma_cg, cuda_in_order, 0)
+
+                                    with CudaWarps(0, 4, name="consumer"):
+                                        Arrive(cuda_in_order) >> _0to1
+                                    with CudaWarps(4, 8, name="consumer"):
+                                        Arrive(cuda_in_order) >> _1to0
                     else:
                         # Await(cg, cuda_in_order, 0) and write D_rmem -> C steps are fissioned.
                         # We must not arrive on the epilogue cluster sync until all wgmma retire.
@@ -229,17 +283,30 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
 
                         Await(cluster_sync, cuda_in_order, 0)
 
-
+    p = xgemm_Sm90_wgmma
+    if tma_to_gmem and ping_pong:
+        assert not enable_split_k
+    # Remove ping_C or C_tensorMap on code paths that don't use them.
+    else:
+        p = delete_buffer(p, "ping_C")
     if not tma_to_gmem:
-        xgemm_Sm90_wgmma = inline_window(xgemm_Sm90_wgmma, "C_tensorMap = _")
+        p = inline_window(p, "C_tensorMap = _")
+
+    # Give unique name and specialize 0th k-iter due to scale_d ptxas issues.
+    xgemm_Sm90_wgmma = p
     xgemm_Sm90_wgmma = rename(xgemm_Sm90_wgmma, config.make_proc_name(ncta_M, ncta_N))
     xgemm_Sm90_wgmma = cut_loop(xgemm_Sm90_wgmma, xgemm_Sm90_wgmma.find_loop("iter_k"), 1)
     xgemm_Sm90_wgmma = simplify(xgemm_Sm90_wgmma)
-    K_split = 2 if enable_split_k else 1
+
+    # Timed sync check
     t = time.time()
-    # if ping_pong:
-    #     xgemm_Sm90_wgmma._hack_no_smem_free_check = True
-    xgemm_Sm90_wgmma.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
+    if ping_pong and tma_to_gmem:
+        print("NO SYNC CHECK: %s" % (xgemm_Sm90_wgmma.name(),))
+        # xgemm_Sm90_wgmma._hack_no_smem_free_check = True
+    else:
+        K_split = 2 if enable_split_k else 1
+        xgemm_Sm90_wgmma.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
     dt = time.time() - t
     print("%.3f s, %s" % (dt, xgemm_Sm90_wgmma.name()))
+
     return xgemm_Sm90_wgmma

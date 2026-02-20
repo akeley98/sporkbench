@@ -3,11 +3,11 @@ from template.make_Sm90a_gemm import make_Sm90a_gemm
 
 cases = []
 
-def helper(M, N, ncta_M, ncta_N):
+def helper(M, N, ncta_M, ncta_N, tma_to_gmem):
     config = Sm90aGemmConfig()
     config.smem_M = M
     config.smem_N = N
-    config.tma_to_gmem = False
+    config.tma_to_gmem = tma_to_gmem
     config.enable_split_k = False
     config.ping_pong = True
     p = make_Sm90a_gemm(config, ncta_M, ncta_N)
@@ -21,10 +21,15 @@ def helper(M, N, ncta_M, ncta_N):
     })
     return p
 
-m128n128_m1n1 = helper(128, 128, 1, 1)
-m128n128_m1n2 = helper(128, 128, 1, 2)
-m256n96_m1n1 = helper(256, 96, 1, 1)
-m256n96_m1n2 = helper(256, 96, 1, 2)
+m128n128_m1n1_tma = helper(128, 128, 1, 1, tma_to_gmem=True)
+m128n128_m1n2_tma = helper(128, 128, 1, 2, tma_to_gmem=True)
+# m256n96_m1n1_tma = helper(256, 96, 1, 1, tma_to_gmem=True)  # too much SMEM
+# m256n96_m1n2_tma = helper(256, 96, 1, 2, tma_to_gmem=True)
+
+m128n128_m1n1 = helper(128, 128, 1, 1, tma_to_gmem=False)
+m128n128_m1n2 = helper(128, 128, 1, 2, tma_to_gmem=False)
+m256n96_m1n1 = helper(256, 96, 1, 1, tma_to_gmem=False)
+m256n96_m1n2 = helper(256, 96, 1, 2, tma_to_gmem=False)
 
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
