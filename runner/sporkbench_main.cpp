@@ -96,6 +96,7 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ct
     };
 
     if (arch != CudaArch::Sm80) {
+        GemmPlotInput L1K352{"L1K352", "GEMM, non-batched, N=1536, K=352", "M", {}};
         GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
         GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
         GemmPlotInput L1K65536{"L1K65536", "GEMM, non-batched, N=1536, K=65536", "M", {}};
@@ -103,7 +104,9 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ct
             const int N = 1536;
             add_MNK(M, N, 512, L1K512, L4K512);
             L1K65536.sizes.push_back({1, M, N, 65536});
+            L1K352.sizes.push_back({1, M, N, 352});
         }
+        plots.push_back(L1K352);
         plots.push_back(L1K512);
         plots.push_back(L4K512);
         plots.push_back(L1K65536);

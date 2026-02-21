@@ -213,9 +213,15 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                     Await(tma_cg, cuda_in_order, 0)
                         Fence(cuda_in_order, cuda_in_order)  # cluster scope
                     elif tma_to_gmem and ping_pong:
+                        cross_task_protect: barrier[ncta_M, ncta_N, 2] @ CudaMbarrier
+                        cross_task_protect_B: barrier(cross_task_protect)[ncta_M, ncta_N, 2] @ CudaMbarrier
                         for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                             for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
                                 with CudaWarps(name="consumer"):
+                                    for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
+                                        Await(cross_task_protect_B[cta_m, cta_n, wg_m], cuda_temporal, ~8)
+                                        Arrive(cuda_in_order) >> cross_task_protect[cta_m, :, wg_m] >> cross_task_protect[:, cta_n, wg_m]
+
                                     _0to1: barrier @ CudaMbarrier
                                     _1to0: barrier(_0to1) @ CudaMbarrier
 
@@ -261,6 +267,18 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int):
                                         Arrive(cuda_in_order) >> _0to1
                                     with CudaWarps(4, 8, name="consumer"):
                                         Arrive(cuda_in_order) >> _1to0
+
+                                # Total off-spec usage.
+                                # Wait until consumer warpgroup is done reading SMEM before
+                                # allowing corresponding producer warp to execute,
+                                # when the current CUDA Cluster moves on to the next task
+                                # (persistent kernel). This needs to consider cluster CTAs
+                                # due to TMA multicast.
+                                # cross_task_protect_B is just for barrier guarding requirements.
+                                with CudaWarps(name="producer"):
+                                    for w in cuda_threads(0, 2, unit=cuda_warp):
+                                        Await(cross_task_protect[cta_m, cta_n, w], cuda_temporal, ~0)
+                                        Arrive(cuda_temporal) >> cross_task_protect_B[cta_m, cta_n, w]
                     else:
                         # Await(cg, cuda_in_order, 0) and write D_rmem -> C steps are fissioned.
                         # We must not arrive on the epilogue cluster sync until all wgmma retire.
