@@ -19,9 +19,10 @@
 namespace sporkbench
 {
 
+constexpr bool minimal_cases = false;
 bool global_all_passed = true;
-constexpr int num_warmup = 4;
-constexpr int num_timed = 100;
+constexpr int num_warmup = minimal_cases ? 0 : 4;
+constexpr int num_timed = minimal_cases ? 1 : 100;
 constexpr size_t L2_shred_bytes = 1u << 27;
 
 struct MainData
@@ -89,36 +90,42 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ct
 {
     std::vector<GemmPlotInput> plots;
 
+    GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
+    GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
+
     auto add_MNK = [] (int M, int N, int K, GemmPlotInput& non_batched, GemmPlotInput& batched)
     {
         non_batched.sizes.push_back(GemmPlotSize{1, M, N, K});
         batched.sizes.push_back(GemmPlotSize{4, M, N, K});
     };
 
-    if (arch != CudaArch::Sm80) {
-        GemmPlotInput L1K352{"L1K352", "GEMM, non-batched, N=1536, K=352", "M", {}};
-        GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
-        GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
-        GemmPlotInput L1K65536{"L1K65536", "GEMM, non-batched, N=1536, K=65536", "M", {}};
-        for (int M = 256; M <= 4096; M += 256) {
-            const int N = 1536;
-            add_MNK(M, N, 512, L1K512, L4K512);
-            L1K65536.sizes.push_back({1, M, N, 65536});
-            L1K352.sizes.push_back({1, M, N, 352});
+    if constexpr (minimal_cases) {
+        add_MNK(4096, 4096, 4096, L1_square, L4_square);
+    }
+    else {
+        if (arch != CudaArch::Sm80) {
+            GemmPlotInput L1K352{"L1K352", "GEMM, non-batched, N=1536, K=352", "M", {}};
+            GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
+            GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
+            GemmPlotInput L1K65536{"L1K65536", "GEMM, non-batched, N=1536, K=65536", "M", {}};
+            for (int M = 256; M <= 4096; M += 256) {
+                const int N = 1536;
+                add_MNK(M, N, 512, L1K512, L4K512);
+                L1K65536.sizes.push_back({1, M, N, 65536});
+                L1K352.sizes.push_back({1, M, N, 352});
+            }
+            plots.push_back(L1K352);
+            plots.push_back(L1K512);
+            plots.push_back(L4K512);
+            plots.push_back(L1K65536);
         }
-        plots.push_back(L1K352);
-        plots.push_back(L1K512);
-        plots.push_back(L4K512);
-        plots.push_back(L1K65536);
-    }
-    GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
-    GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
-    for (int M = 512; M <= 4096; M += 512) {
-        add_MNK(M, M, M, L1_square, L4_square);
-    }
-    if (arch != CudaArch::Sm80) {
+        for (int M = 512; M <= 4096; M += 512) {
+            add_MNK(M, M, M, L1_square, L4_square);
+        }
         for (int M = 2048 * 3; M <= 2048 * 6; M += 2048) {
-            L1_square.sizes.push_back(GemmPlotSize{1, M, M, M});
+            if (arch != CudaArch::Sm80 || M <= 8192) {
+                L1_square.sizes.push_back(GemmPlotSize{1, M, M, M});
+            }
         }
     }
     plots.push_back(L1_square);
