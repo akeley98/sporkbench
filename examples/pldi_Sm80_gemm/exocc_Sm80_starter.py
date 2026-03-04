@@ -349,12 +349,12 @@ def starter_ring_smem_gemm(L: size, M: size, N: size, K: size, C: f32[L, M, N] @
                                 Sm80_ldmatrix_f16(
                                     A_rmem[mw, nw, :, :, 0, s*2:s*2+2, :, 0:2],
                                     A_smem[0, mw * 64 + 16 * s : mw * 64 + 16 * s + 16, 0:16],
-                                    nmat0=2, nmat1=2,
+                                    nmat0=2, nmat1=2, operand="A",
                                 )
                                 Sm80_ldmatrix_f16(
                                     B_rmem[mw, nw, :, :, 0, s*2:s*2+2, :, 0:2],
                                     B_smem[0, nw * 64 + 16 * s : nw * 64 + 16 * s + 16, 0:16],
-                                    nmat0=2, nmat1=2,
+                                    nmat0=2, nmat1=2, operand="B",
                                 )
 
                     for ks in seq(RING - 1, K / 32 + RING - 1):
@@ -364,12 +364,12 @@ def starter_ring_smem_gemm(L: size, M: size, N: size, K: size, C: f32[L, M, N] @
                                     Sm80_ldmatrix_f16(
                                         A_rmem[mw, nw, :, :, 1, s*2:s*2+2, :, 0:2],
                                         A_smem[(ks - RING + 1) % RING, mw * 64 + 16 * s : mw * 64 + 16 * s + 16, 16:32],
-                                        nmat0=2, nmat1=2,
+                                        nmat0=2, nmat1=2, operand="A",
                                     )
                                     Sm80_ldmatrix_f16(
                                         B_rmem[mw, nw, :, :, 1, s*2:s*2+2, :, 0:2],
                                         B_smem[(ks - RING + 1) % RING, nw * 64 + 16 * s : nw * 64 + 16 * s + 16, 16:32],
-                                        nmat0=2, nmat1=2,
+                                        nmat0=2, nmat1=2, operand="B",
                                     )
 
                                 for ms in seq(0, 4, pragma_unroll=0):
@@ -405,12 +405,12 @@ def starter_ring_smem_gemm(L: size, M: size, N: size, K: size, C: f32[L, M, N] @
                                     Sm80_ldmatrix_f16(
                                         A_rmem[mw, nw, :, :, 0, s*2:s*2+2, :, 0:2],
                                         A_smem[(ks - RING + 2) % RING, mw * 64 + 16 * s : mw * 64 + 16 * s + 16, 0:16],
-                                        nmat0=2, nmat1=2,
+                                        nmat0=2, nmat1=2, operand="A",
                                     )
                                     Sm80_ldmatrix_f16(
                                         B_rmem[mw, nw, :, :, 0, s*2:s*2+2, :, 0:2],
                                         B_smem[(ks - RING + 2) % RING, nw * 64 + 16 * s : nw * 64 + 16 * s + 16, 0:16],
-                                        nmat0=2, nmat1=2,
+                                        nmat0=2, nmat1=2, operand="B",
                                     )
                                 for ms in seq(0, 4, pragma_unroll=0):
                                     for ns in seq(0, 8, pragma_unroll=0):
