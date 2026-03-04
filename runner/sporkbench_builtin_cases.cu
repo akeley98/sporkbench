@@ -6,6 +6,8 @@
 
 #include "sporkbench_cutlass_Sm80.hpp"
 
+#include "pldi_Sm80_edited/exocc_Sm80_edited.h"
+
 namespace sporkbench {
 
 #define CUBLAS_CHECK(x) if (auto _cublas_status = x; _cublas_status != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "%s:%i cublas status %i\n", __FILE__, __LINE__, (int)_cublas_status); }
@@ -119,10 +121,16 @@ void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, cons
             y, 1));
 }
 
+static void run_pldi_Sm80_edited_exo_gemm(cublasHandle_t, GemmSize size, const __half* A, const __half* B, float* C)
+{
+    void* ctxt = nullptr;
+    starter_ring_smem_gemm_2(ctxt, size.L, size.M, size.N, size.K_cluster, C, A, B);
+}
+
 template <typename Ctype, typename ABtype>
 const std::vector<GemmCaseT<Ctype, ABtype>>& get_builtin_cases_gemm_impl(const GemmCaseT<Ctype, ABtype>&)
 {
-    static const std::vector<GemmCaseT<Ctype, ABtype>> result {
+    static std::vector<GemmCaseT<Ctype, ABtype>> result {
       GemmCaseT<Ctype, ABtype>{
         CudaArch::Sm80,
         "sporkbench_builtin_cases.cu",
@@ -137,6 +145,23 @@ const std::vector<GemmCaseT<Ctype, ABtype>>& get_builtin_cases_gemm_impl(const G
       },
       make_cutlass_Sm80_GemmCase(Ctype{}, ABtype{}),
     };
+
+    if constexpr (std::is_same_v<GemmCaseT<Ctype, ABtype>, GemmCase_f32_f16>) {
+        result.push_back(GemmCase_f32_f16 {
+            CudaArch::Sm80,
+            "exocc_Sm80_edited.cuh",
+            "pldi_Sm80_edited_exo",
+            run_pldi_Sm80_edited_exo_gemm,
+            A_row_major_flag | C_row_major_flag,
+            1, 2147483647,  // L
+            128, 2147483647,  // M
+            128, 2147483647,  // N
+            1, 1,  // K_split
+            128, 2147483647,  // K_cluster
+          }
+      );
+    }
+
     return result;
 }
 

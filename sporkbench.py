@@ -54,14 +54,14 @@ class RunnerSource:
     o: str
 
 
-# Scan for all .cpp and .cu files in the runner/ directory
+# Scan for all .c, .cpp, and .cu files in the runner/ directory
 # These will be compiled in the user's bin_dir/sporkbench_runner
 runner_sources: List[RunnerSource] = []
 runner_src_dir = os.path.join(sporkbench_dir, "runner")
 runner_bin_dir = os.path.join(bin_dir, "sporkbench_runner")
 for dname, _, fnames in os.walk(runner_src_dir):
     for fname in fnames:
-        if fname.endswith(".cpp") or fname.endswith(".cu"):
+        if fname.endswith(".cpp") or fname.endswith(".cu") or fname.endswith(".c"):
             full_path = os.path.join(dname, fname)
             rel_dir = os.path.relpath(dname, runner_src_dir)
             o_path = os.path.join(os.path.join(runner_bin_dir, rel_dir), fname + ".o")
