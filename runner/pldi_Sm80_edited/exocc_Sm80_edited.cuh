@@ -277,6 +277,8 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
   const int _1thr = threadIdx.x % 4;
   exo_f16* A_smem_ldgsts_thread = &(A_smem[_4thr * 32 + 8 * _1thr].swizzle_get());
   exo_f16* B_smem_ldgsts_thread = &(B_smem[_4thr * 32 + 8 * _1thr].swizzle_get());
+  // NOTE: need separate ldsm0 and ldsm1 pointers because the +16 difference
+  // is not divisible by 1024 bytes (the period of the swizzle pattern).
   const exo_f16* A_smem_ldsm0_thread = &A_smem[((64 * _64thr_mw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 3) & 1)) * 32 + 8 * (((threadIdx.x) >> 4) & 1))].swizzle_get();
   const exo_f16* A_smem_ldsm1_thread = &A_smem[((64 * _64thr_mw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 3) & 1)) * 32 + 16 + 8 * (((threadIdx.x) >> 4) & 1))].swizzle_get();
   const exo_f16* B_smem_ldsm0_thread = &B_smem[((64 * _32thr_nw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 4) & 1)) * 32 + 8 * (((threadIdx.x) >> 3) & 1))].swizzle_get();
@@ -299,10 +301,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
               :"r"(exo_smemU32(&A_smem_ldgsts_thread[ks * 4096 + (32 * cp_async_mno) * 32])),
               "l"((&A_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * A_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * A_tile.strides[1]]))
           );
-          exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_cg_shared_global), 0, __LINE__);
-          exo_excutLog.log_u32_arg(exo_smemU32((&A_smem[(ks * 4096 + (exo_4thr_cp_async_mni + 32 * cp_async_mno) * 32 + 8 * exo_1thr_cp_async_ko)].swizzle_get())));
-          exo_excutLog.log_ptr_arg((&A_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * A_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * A_tile.strides[1]]));
-          exo_excutLog.log_u32_arg(static_cast<uint32_t>(16));
         }
       }
     }
@@ -318,10 +316,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
               :"r"(exo_smemU32(&B_smem_ldgsts_thread[ks * 4096 + (32 * cp_async_mno) * 32])),
               "l"((&B_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * B_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * B_tile.strides[1]]))
           );
-          exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_cg_shared_global), 0, __LINE__);
-          exo_excutLog.log_u32_arg(exo_smemU32((&B_smem[(ks * 4096 + (exo_4thr_cp_async_mni + 32 * cp_async_mno) * 32 + 8 * exo_1thr_cp_async_ko)].swizzle_get())));
-          exo_excutLog.log_ptr_arg((&B_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * B_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * B_tile.strides[1]]));
-          exo_excutLog.log_u32_arg(static_cast<uint32_t>(16));
         }
       }
     }
@@ -331,7 +325,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
       asm volatile(
         "cp.async.commit_group;"
       );
-      exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_commit_group), 0, __LINE__);
     }
   }
   // cuda_threads(0, 128, unit=cuda_thread)
@@ -340,15 +333,11 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
     asm volatile(
       "cp.async.wait_group 2;"
     );
-    exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_wait_group), 0, __LINE__);
-    exo_excutLog.log_u32_arg(static_cast<uint32_t>(2));
   }
   // Fence(cuda_in_order, cuda_in_order)
   asm volatile(
     "barrier.cta.sync 0;"
   );
-  exo_excutLog.log_action(EXO_EXCUT_STR_ID(barrier_cta_sync), 0, __LINE__);
-  exo_excutLog.log_u32_arg(static_cast<uint32_t>(0));
   // cuda_threads(0, 2, unit=2 * cuda_warp)
   if ([[maybe_unused]] int exo_64thr_mw = (threadIdx.x / 64); 1) {
     // cuda_threads(0, 2, unit=cuda_warp)
@@ -360,15 +349,11 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
             :"=r"(A_rmem[0][2 * s][0].ptx_data), "=r"(A_rmem[0][2 * s + 1][0].ptx_data), "=r"(A_rmem[0][2 * s][1].ptx_data), "=r"(A_rmem[0][2 * s + 1][1].ptx_data)
             :"r"(exo_smemU32(&A_smem_ldsm0_thread[16 * s * 32]))
         );
-        exo_excutLog.log_action(EXO_EXCUT_STR_ID(ldmatrix_sync_aligned_x4_m8n8_shared_b16), 0, __LINE__);
-        exo_excutLog.log_u32_arg(exo_smemU32((&A_smem[((16 * s + 64 * exo_64thr_mw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 3) & 1)) * 32 + 8 * (((threadIdx.x) >> 4) & 1))].swizzle_get())));
         asm volatile(
           "ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%0, %1, %2, %3}, [%4];"
             :"=r"(B_rmem[0][2 * s][0].ptx_data), "=r"(B_rmem[0][2 * s][1].ptx_data), "=r"(B_rmem[0][2 * s + 1][0].ptx_data), "=r"(B_rmem[0][2 * s + 1][1].ptx_data)
             :"r"(exo_smemU32(&B_smem_ldsm0_thread[16 * s * 32]))
         );
-        exo_excutLog.log_action(EXO_EXCUT_STR_ID(ldmatrix_sync_aligned_x4_m8n8_shared_b16), 0, __LINE__);
-        exo_excutLog.log_u32_arg(exo_smemU32((&B_smem[((16 * s + 64 * exo_32thr_nw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 4) & 1)) * 32 + 8 * (((threadIdx.x) >> 3) & 1))].swizzle_get())));
       }
     }
   }
@@ -384,15 +369,11 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
               :"=r"(A_rmem[1][2 * s][0].ptx_data), "=r"(A_rmem[1][2 * s + 1][0].ptx_data), "=r"(A_rmem[1][2 * s][1].ptx_data), "=r"(A_rmem[1][2 * s + 1][1].ptx_data)
               :"r"(exo_smemU32(&A_smem_ldsm1_thread[((-3 + ks) & 3) * 4096 + 16 * s * 32]))
           );
-          exo_excutLog.log_action(EXO_EXCUT_STR_ID(ldmatrix_sync_aligned_x4_m8n8_shared_b16), 0, __LINE__);
-          exo_excutLog.log_u32_arg(exo_smemU32((&A_smem[(((-3 + ks) & 3) * 4096 + (16 * s + 64 * exo_64thr_mw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 3) & 1)) * 32 + 16 + 8 * (((threadIdx.x) >> 4) & 1))].swizzle_get())));
           asm volatile(
             "ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%0, %1, %2, %3}, [%4];"
               :"=r"(B_rmem[1][2 * s][0].ptx_data), "=r"(B_rmem[1][2 * s][1].ptx_data), "=r"(B_rmem[1][2 * s + 1][0].ptx_data), "=r"(B_rmem[1][2 * s + 1][1].ptx_data)
               :"r"(exo_smemU32(&B_smem_ldsm1_thread[((-3 + ks) & 3) * 4096 + 16 * s * 32]))
           );
-          exo_excutLog.log_action(EXO_EXCUT_STR_ID(ldmatrix_sync_aligned_x4_m8n8_shared_b16), 0, __LINE__);
-          exo_excutLog.log_u32_arg(exo_smemU32((&B_smem[(((-3 + ks) & 3) * 4096 + (16 * s + 64 * exo_32thr_nw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 4) & 1)) * 32 + 16 + 8 * (((threadIdx.x) >> 3) & 1))].swizzle_get())));
         }
         #pragma unroll
         for (int ms = 0; ms < 4; ms++) {
@@ -405,7 +386,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
                 "r"(*reinterpret_cast<const int32_t*>((&B_rmem[0][ns][0].ptx_data))), "r"(*reinterpret_cast<const int32_t*>((&B_rmem[0][ns][1].ptx_data))),
                 "f"(D_rmem[ms][ns][0]), "f"(D_rmem[ms][ns][1]), "f"(D_rmem[ms][ns][2]), "f"(D_rmem[ms][ns][3])
             );
-            exo_excutLog.log_action(EXO_EXCUT_STR_ID(mma_sync_aligned_m16n8k16_row_col_f32_f16_f16_f32), 0, __LINE__);
           }
         }
       }
@@ -425,10 +405,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
                 :"r"(exo_smemU32(&A_smem_ldgsts_thread[(ks & 3) * 4096 + (32 * cp_async_mno) * 32])),
                 "l"((&A_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * A_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * A_tile.strides[1]]))
             );
-            exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_cg_shared_global), 0, __LINE__);
-            exo_excutLog.log_u32_arg(exo_smemU32((&A_smem[((ks & 3) * 4096 + (exo_4thr_cp_async_mni + 32 * cp_async_mno) * 32 + 8 * exo_1thr_cp_async_ko)].swizzle_get())));
-            exo_excutLog.log_ptr_arg((&A_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * A_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * A_tile.strides[1]]));
-            exo_excutLog.log_u32_arg(static_cast<uint32_t>(16));
           }
         }
       }
@@ -444,10 +420,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
                 :"r"(exo_smemU32(&B_smem_ldgsts_thread[(ks & 3) * 4096 + (32 * cp_async_mno) * 32])),
                 "l"((&B_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * B_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * B_tile.strides[1]]))
             );
-            exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_cg_shared_global), 0, __LINE__);
-            exo_excutLog.log_u32_arg(exo_smemU32((&B_smem[((ks & 3) * 4096 + (exo_4thr_cp_async_mni + 32 * cp_async_mno) * 32 + 8 * exo_1thr_cp_async_ko)].swizzle_get())));
-            exo_excutLog.log_ptr_arg((&B_tile.data[(exo_4thr_cp_async_mni + 32 * cp_async_mno) * B_tile.strides[0] + (8 * exo_1thr_cp_async_ko) * B_tile.strides[1]]));
-            exo_excutLog.log_u32_arg(static_cast<uint32_t>(16));
           }
         }
       }
@@ -458,20 +430,15 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
       asm volatile(
         "cp.async.commit_group;"
       );
-      exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_commit_group), 0, __LINE__);
       // Await(cg[tid], cuda_in_order, 2)
       asm volatile(
         "cp.async.wait_group 2;"
       );
-      exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_wait_group), 0, __LINE__);
-      exo_excutLog.log_u32_arg(static_cast<uint32_t>(2));
     }
     // Fence(cuda_in_order, cuda_in_order)
     asm volatile(
       "barrier.cta.sync 0;"
     );
-    exo_excutLog.log_action(EXO_EXCUT_STR_ID(barrier_cta_sync), 0, __LINE__);
-    exo_excutLog.log_u32_arg(static_cast<uint32_t>(0));
     // cuda_threads(0, 2, unit=2 * cuda_warp)
     if ([[maybe_unused]] int exo_64thr_mw = (threadIdx.x / 64); 1) {
       // cuda_threads(0, 2, unit=cuda_warp)
@@ -483,15 +450,11 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
               :"=r"(A_rmem[0][2 * s][0].ptx_data), "=r"(A_rmem[0][2 * s + 1][0].ptx_data), "=r"(A_rmem[0][2 * s][1].ptx_data), "=r"(A_rmem[0][2 * s + 1][1].ptx_data)
               :"r"(exo_smemU32(&A_smem_ldsm0_thread[((-2 + ks) & 3) * 4096 + 16 * s * 32]))
           );
-          exo_excutLog.log_action(EXO_EXCUT_STR_ID(ldmatrix_sync_aligned_x4_m8n8_shared_b16), 0, __LINE__);
-          exo_excutLog.log_u32_arg(exo_smemU32((&A_smem[(((-2 + ks) & 3) * 4096 + (16 * s + 64 * exo_64thr_mw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 3) & 1)) * 32 + 8 * (((threadIdx.x) >> 4) & 1))].swizzle_get())));
           asm volatile(
             "ldmatrix.sync.aligned.x4.m8n8.shared.b16 {%0, %1, %2, %3}, [%4];"
               :"=r"(B_rmem[0][2 * s][0].ptx_data), "=r"(B_rmem[0][2 * s][1].ptx_data), "=r"(B_rmem[0][2 * s + 1][0].ptx_data), "=r"(B_rmem[0][2 * s + 1][1].ptx_data)
               :"r"(exo_smemU32(&B_smem_ldsm0_thread[((-2 + ks) & 3) * 4096 + 16 * s * 32]))
           );
-          exo_excutLog.log_action(EXO_EXCUT_STR_ID(ldmatrix_sync_aligned_x4_m8n8_shared_b16), 0, __LINE__);
-          exo_excutLog.log_u32_arg(exo_smemU32((&B_smem[(((-2 + ks) & 3) * 4096 + (16 * s + 64 * exo_32thr_nw + (threadIdx.x % 8) + 8 * (((threadIdx.x) >> 4) & 1)) * 32 + 8 * (((threadIdx.x) >> 3) & 1))].swizzle_get())));
         }
         #pragma unroll
         for (int ms = 0; ms < 4; ms++) {
@@ -504,7 +467,6 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
                 "r"(*reinterpret_cast<const int32_t*>((&B_rmem[1][ns][0].ptx_data))), "r"(*reinterpret_cast<const int32_t*>((&B_rmem[1][ns][1].ptx_data))),
                 "f"(D_rmem[ms][ns][0]), "f"(D_rmem[ms][ns][1]), "f"(D_rmem[ms][ns][2]), "f"(D_rmem[ms][ns][3])
             );
-            exo_excutLog.log_action(EXO_EXCUT_STR_ID(mma_sync_aligned_m16n8k16_row_col_f32_f16_f16_f32), 0, __LINE__);
           }
         }
       }
@@ -516,21 +478,16 @@ exo_CudaInline_exocc_Sm80_edited::exo_Cuda0_starter_ring_smem_gemm_2::exo_device
     asm volatile(
       "cp.async.commit_group;"
     );
-    exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_commit_group), 0, __LINE__);
     // Await(cg[tid], cuda_in_order, 0)
     asm volatile(
       "cp.async.wait_group 0;"
     );
-    exo_excutLog.log_action(EXO_EXCUT_STR_ID(cp_async_wait_group), 0, __LINE__);
-    exo_excutLog.log_u32_arg(static_cast<uint32_t>(0));
   }
   // free(cg)
   // Fence(cuda_in_order, cuda_in_order)
   asm volatile(
     "barrier.cta.sync 0;"
   );
-  exo_excutLog.log_action(EXO_EXCUT_STR_ID(barrier_cta_sync), 0, __LINE__);
-  exo_excutLog.log_u32_arg(static_cast<uint32_t>(0));
   // cuda_threads(0, 2, unit=2 * cuda_warp)
   if ([[maybe_unused]] int exo_64thr_mw = (threadIdx.x / 64); 1) {
     // cuda_threads(0, 2, unit=cuda_warp)
