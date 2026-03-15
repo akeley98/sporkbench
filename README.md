@@ -16,6 +16,8 @@ So currently I don't automate running the full pipeline.
 
 You can specify the compilers with environment variables `EXO_NVCC`, `EXO_NVCC`, `EXO_CXX`, `EXO_NINJA`.
 
+The environment variable `EXO_KITTENS` must be the `include/` directory of [ThunderKittens](https://github.com/HazyResearch/ThunderKittens)
+
 TODO: generate wrappers for nvbench, instead of our own test harness.
 
 

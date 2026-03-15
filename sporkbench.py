@@ -15,6 +15,10 @@ exocc = os.environ.get("EXO_EXOCC", "exocc")
 nvcc = os.environ.get("EXO_NVCC", "nvcc")
 cxx = os.environ.get("EXO_CXX", "g++-12")
 ninja = os.environ.get("EXO_NINJA", "ninja")
+kittens = os.environ.get("EXO_KITTENS", None)
+
+if not kittens:
+    raise ValueError("Missing $EXO_KITTENS")
 
 # ninja has inconsistent quoting rules I don't fully understand.
 # It seems we want to use Qarg whenever the value is parsed
@@ -112,7 +116,7 @@ nvcc_bin = {Qarg(nvcc)}
 cxx = {Qarg(cxx)}
 exocc = {Qarg(exocc)}
 python3 = {Qarg(python3)}
-nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} $
+nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} -I {Qarg(kittens)} $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
     --expt-extended-lambda --expt-relaxed-constexpr $
     --keep --keep-dir {Qarg(bin_dir)}
