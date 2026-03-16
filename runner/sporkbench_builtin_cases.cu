@@ -128,9 +128,9 @@ static void run_pldi_Sm80_edited_exo_gemm(cublasHandle_t, GemmSize size, const _
 }
 
 template <typename Ctype, typename ABtype>
-const std::vector<GemmCaseT<Ctype, ABtype>>& get_builtin_cases_gemm_impl(const GemmCaseT<Ctype, ABtype>&)
+std::vector<GemmCaseT<Ctype, ABtype>> make_builtin_cases_gemm(const GemmCaseT<Ctype, ABtype>&)
 {
-    static std::vector<GemmCaseT<Ctype, ABtype>> result {
+    std::vector<GemmCaseT<Ctype, ABtype>> result {
       GemmCaseT<Ctype, ABtype>{
         CudaArch::Sm80,
         "sporkbench_builtin_cases.cu",
@@ -167,17 +167,20 @@ const std::vector<GemmCaseT<Ctype, ABtype>>& get_builtin_cases_gemm_impl(const G
 
 const std::vector<GemmCase_f32_f32>& get_builtin_cases(const GemmCase_f32_f32& arg)
 {
-    return get_builtin_cases_gemm_impl(arg);
+    const static std::vector<GemmCase_f32_f32> saved = make_builtin_cases_gemm(arg);
+    return saved;
 }
 
 const std::vector<GemmCase_f32_f16>& get_builtin_cases(const GemmCase_f32_f16& arg)
 {
-    return get_builtin_cases_gemm_impl(arg);
+    const static std::vector<GemmCase_f32_f16> saved = make_builtin_cases_gemm(arg);
+    return saved;
 }
 
 const std::vector<GemmCase_f16_f16>& get_builtin_cases(const GemmCase_f16_f16& arg)
 {
-    return get_builtin_cases_gemm_impl(arg);
+    const static std::vector<GemmCase_f16_f16> saved = make_builtin_cases_gemm(arg);
+    return saved;
 }
 
 
