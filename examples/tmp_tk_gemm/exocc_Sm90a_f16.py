@@ -65,8 +65,6 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
         A_tensorMap = A[:,:,:,:] @ Sm90_tensorMap(128, *smem_box_A)
         B_tensorMap = B[:,:,:,:] @ Sm90_tensorMap(128, *smem_box_B)
 
-        cudaMemsetAsync0_3f32(L, M, N, C[:,:,:])  # TODO REMOVE
-
         with CudaDeviceFunction(clusterDim=ncta_M * ncta_N, warp_config=my_warp_config, blocks_per_sm=1):
           for batch in cuda_tasks(0, L):
             for task_k in cuda_tasks(0, K_split):
