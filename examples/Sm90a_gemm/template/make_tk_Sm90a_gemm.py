@@ -64,8 +64,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
     # (batch dim, MN smem, k_task, K smem)
     smem_box_A = (1, tile_M // ncta_N, 1, smem_K)
     smem_box_B = (1, tile_N // ncta_M, 1, smem_K)  # ncta_M is not a typo
-    # (batch dim, N smem, M smem)
-    smem_box_C = (1, tile_N, tile_M)
+    # (batch dim, M smem, N smem)
+    smem_box_C = (1, tile_M, tile_N)
 
     # K dimension of tensor is K_split * cluster_K
     # i.e. each task (cluster) is responsible for cluster_M * cluster_N * cluster_K
@@ -84,6 +84,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
         assert N > 0
         assert cluster_K > 0
         assert cluster_K % 4 == 0
+        assert M % cluster_M == 0  # TODO
+        assert N % cluster_N == 0  # TODO
 
         A_tensorMap = A[:,:,:,:] @ Sm90_tensorMap(128, *smem_box_A)
         B_tensorMap = B[:,:,:,:] @ Sm90_tensorMap(128, *smem_box_B)
@@ -350,7 +352,6 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
         p = inline_window(p, "C_tensorMap = _")
 
     # Give unique name and specialize 0th k-iter due to scale_d ptxas issues.
-    p = p
     p = rename(p, config.make_proc_name(ncta_M, ncta_N))
     p = cut_loop(p, p.find_loop("iter_k"), 1)
     p = simplify(p)
@@ -373,6 +374,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
             "A_type": "f32",
             "B_type": "f32",
             "C_type": "f32",
+            "M_divisor": cluster_M,
+            "N_divisor": cluster_N,
             "proc": p.name(),
             "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
             "A_major": "row", "B_major": "col", "C_major": "row",
