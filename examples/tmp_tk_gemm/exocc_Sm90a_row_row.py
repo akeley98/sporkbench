@@ -16,7 +16,6 @@ from typing import List
 def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, cases: List[dict]):
     # K_split added for API compatibility; for now, K_split=1.
 
-    assert D_type == f32, f"{D_type} needs to be f32 for now"
     smem_M = 128
     smem_N = 256
     smem_K = 128 * 8 // A_type.bits
@@ -36,6 +35,12 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
     smem_box_B = (1, 1, smem_K // ncta_M, 64)
     # (batch dim, M smem, N smem)
     smem_box_C = (1, tile_M, tile_N)  # For C_tensorMap if needed.
+
+    # Information needed to help us stage each warp's [16, wg_N]-sized D tile
+    # into the swizzled C_smem used for the epilogue.
+    epilogue_advice = cuda_tk_store_rs_advice(16, wg_N, dst=D_type, src=D_type, swizzle=128)
+    C_inner_cols = epilogue_advice.swizzle_elements
+    local_cuda_tk_store_rs = epilogue_advice.instr
 
     enable_split_k = False  # TODO
 
@@ -79,7 +84,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                             with CudaWarps(name="consumer"):
                                 for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                     for ms in seq(0, wg_M / 64, pragma_unroll=0):
-                                        Sm90_tk_zero_scale_d(D_rmem[cta_m,cta_n,wg_m,:,ms,:,:], N=wg_N, D=f32)
+                                        Sm90_tk_zero_scale_d(D_rmem[cta_m,cta_n,wg_m,:,ms,:,:], N=wg_N, D=D_type)
 
                     raw : barrier[ncta_M, ncta_N] @ CudaMbarrier
                     war : barrier(raw)[ncta_M, ncta_N] @ CudaMbarrier
@@ -151,20 +156,16 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
 
                     Fence(cuda_in_order, cuda_in_order)
 
-                    C_smem: D_type[ncta_M, ncta_N, tile_N / 32, tile_M, 32] @ Sm90_SmemSwizzled(128)
+                    C_smem: D_type[ncta_M, ncta_N, tile_N / C_inner_cols, tile_M, C_inner_cols] @ Sm90_SmemSwizzled(128)
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                         for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
                             with CudaWarps(name="consumer"):
                                 for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                     for ms in seq(0, wg_M / 64):
                                         for w in cuda_threads(0, 4, unit=cuda_warp):
-                                            cuda_tk_store_rs_inner_cols_32(
+                                            local_cuda_tk_store_rs(
                                                 C_smem[cta_m, cta_n, :, wg_m * wg_M + ms * 64 + w * 16: wg_m * wg_M + ms * 64 + w * 16 + 16, :],
-                                                D_rmem[cta_m, cta_n, wg_m, w, ms, :, :],
-                                                dst=f32,
-                                                src=f32,
-                                                rows=16,
-                                                outer_cols=tile_N // 32,
+                                                D_rmem[cta_m, cta_n, wg_m, w, ms, :, :]
                                             )
                             Fence(cuda_in_order, cuda_in_order)
                             with CudaWarps(name="consumer"):
@@ -173,15 +174,15 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                     cluster_M * task_m + tile_M * cta_m : cluster_M * task_m + tile_M * cta_m + tile_M,
                                     cluster_N * task_n + tile_N * cta_n : cluster_N * task_n + tile_N * cta_n + tile_N,
                                 ]
-                                for n in seq(0, tile_N / 32):
+                                for n in seq(0, tile_N / C_inner_cols):
                                     for m in cuda_threads(0, 8, unit=cuda_warp):
                                         cuda_tk_store_sg(
-                                            C_tile[m * (tile_M / 8) : m * (tile_M / 8) + tile_M / 8, n * 32 : n * 32 + 32],
+                                            C_tile[m * (tile_M / 8) : m * (tile_M / 8) + tile_M / 8, n * C_inner_cols : n * C_inner_cols + C_inner_cols],
                                             C_smem[cta_m, cta_n, n, m * (tile_M / 8) : m * (tile_M / 8) + tile_M / 8, :],
                                             size0=tile_M // 8,
-                                            size1=32,
-                                            dst=f32,
-                                            src=f32,
+                                            size1=C_inner_cols,
+                                            dst=D_type,
+                                            src=D_type,
                                         )
 
                     Fence(cuda_in_order, cuda_in_order)
@@ -221,10 +222,15 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
 
 cases = []
 
-gemm_m1n1 = make_Sm90a_generic_gemm(1, 1, f32, f16, f16, cases)
-# gemm_m1n2 = make_Sm90a_generic_gemm(1, 2, f32, f16, f16, cases)
-# gemm_m2n1 = make_Sm90a_generic_gemm(2, 1, f32, f16, f16, cases)
-# gemm_m2n2 = make_Sm90a_generic_gemm(2, 2, f32, f16, f16, cases)
+gemm_m1n1_f32_f16 = make_Sm90a_generic_gemm(1, 1, f32, f16, f16, cases)
+gemm_m1n2_f32_f16 = make_Sm90a_generic_gemm(1, 2, f32, f16, f16, cases)
+gemm_m2n1_f32_f16 = make_Sm90a_generic_gemm(2, 1, f32, f16, f16, cases)
+gemm_m2n2_f32_f16 = make_Sm90a_generic_gemm(2, 2, f32, f16, f16, cases)
+
+gemm_m1n1_f16_f16 = make_Sm90a_generic_gemm(1, 1, f16, f16, f16, cases)
+gemm_m1n2_f16_f16 = make_Sm90a_generic_gemm(1, 2, f16, f16, f16, cases)
+gemm_m2n1_f16_f16 = make_Sm90a_generic_gemm(2, 1, f16, f16, f16, cases)
+gemm_m2n2_f16_f16 = make_Sm90a_generic_gemm(2, 2, f16, f16, f16, cases)
 
 import json
 json.dump(cases, open(__file__ + ".json", "w"))

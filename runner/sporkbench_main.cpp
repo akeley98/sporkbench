@@ -117,7 +117,11 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ct
             plots.push_back(L1K352);
             plots.push_back(L1K512);
             plots.push_back(L4K512);
-            plots.push_back(L1K65536);
+
+            if (sizeof(Ctype) >= 4) {
+                // K=65536 won't work well for 16-bit accumulators!
+                plots.push_back(L1K65536);
+            }
         }
         for (int M = 512; M <= 4096; M += 512) {
             add_MNK(M, M, M, L1_square, L4_square);
