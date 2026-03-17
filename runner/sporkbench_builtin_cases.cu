@@ -2,7 +2,9 @@
 
 #include <cassert>
 #include <cublas_v2.h>
+#include <stdexcept>
 #include <stdio.h>
+#include <type_traits>
 
 #include "sporkbench_cutlass_Sm80.hpp"
 
@@ -59,9 +61,29 @@ struct GemmEx
         return CUDA_R_16F;
     }
 
+    static cudaDataType_t get_type_code(__nv_bfloat16)
+    {
+        return CUDA_R_16BF;
+    }
+
     static cudaDataType_t get_type_code(float)
     {
         return CUDA_R_32F;
+    }
+
+    static cudaDataType_t get_type_code(exo_e4m3)
+    {
+        return CUDA_R_8F_E4M3;
+    }
+
+    static cudaDataType_t get_type_code(exo_e5m2)
+    {
+        return CUDA_R_8F_E5M2;
+    }
+
+    static cudaDataType_t get_type_code(exo_e8m0)
+    {
+        throw std::runtime_error("TODO GemmEx::get_type_code(exo_e8m0)");
     }
 
     static void run(cublasHandle_t cublasH, GemmSize size, const ABtype* A, const ABtype* B, Ctype* C)
@@ -105,7 +127,27 @@ void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __half* A, con
     GemmEx<__half, __half, __half>::run(cublasH, size, A, B, C);
 }
 
-static_assert(std::variant_size_v<GemmCaseUnion> == 3, "Add more cublas cases");
+void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __nv_bfloat16* A, const __nv_bfloat16* B, float* C)
+{
+    GemmEx<float, exo_bf16, float>::run(cublasH, size, A, B, C);
+}
+
+void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e4m3* A, const exo_e4m3* B, float* C)
+{
+    GemmEx<float, exo_e4m3, float>::run(cublasH, size, A, B, C);
+}
+
+void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e5m2* A, const exo_e5m2* B, float* C)
+{
+    GemmEx<float, exo_e5m2, float>::run(cublasH, size, A, B, C);
+}
+
+void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e8m0* A, const exo_e8m0* B, float* C)
+{
+    GemmEx<float, exo_e8m0, float>::run(cublasH, size, A, B, C);
+}
+
+static_assert(std::variant_size_v<GemmCaseUnion> == 7, "Add more cublas cases");
 
 void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y)
 {
@@ -143,8 +185,11 @@ std::vector<GemmCaseT<Ctype, ABtype>> make_builtin_cases_gemm(const GemmCaseT<Ct
         1, 1,  // K_split: set to 1, so we don't sweep this parameter.
         1, INT32_MAX,  // K_cluster
       },
-      make_cutlass_Sm80_GemmCase(Ctype{}, ABtype{}),
     };
+
+    if constexpr (std::is_same_v<ABtype, float> || std::is_same_v<ABtype, __half>) {
+        result.push_back(make_cutlass_Sm80_GemmCase(Ctype{}, ABtype{}));
+    }
 
     if constexpr (std::is_same_v<GemmCaseT<Ctype, ABtype>, GemmCase_f32_f16>) {
         result.push_back(GemmCase_f32_f16 {
@@ -180,6 +225,30 @@ const std::vector<GemmCase_f32_f16>& get_builtin_cases(const GemmCase_f32_f16& a
 const std::vector<GemmCase_f16_f16>& get_builtin_cases(const GemmCase_f16_f16& arg)
 {
     const static std::vector<GemmCase_f16_f16> saved = make_builtin_cases_gemm(arg);
+    return saved;
+}
+
+const std::vector<GemmCase_f32_bf16>& get_builtin_cases(const GemmCase_f32_bf16& arg)
+{
+    const static std::vector<GemmCase_f32_bf16> saved = make_builtin_cases_gemm(arg);
+    return saved;
+}
+
+const std::vector<GemmCase_f32_e4m3>& get_builtin_cases(const GemmCase_f32_e4m3& arg)
+{
+    const static std::vector<GemmCase_f32_e4m3> saved = make_builtin_cases_gemm(arg);
+    return saved;
+}
+
+const std::vector<GemmCase_f32_e5m2>& get_builtin_cases(const GemmCase_f32_e5m2& arg)
+{
+    const static std::vector<GemmCase_f32_e5m2> saved = make_builtin_cases_gemm(arg);
+    return saved;
+}
+
+const std::vector<GemmCase_f32_e8m0>& get_builtin_cases(const GemmCase_f32_e8m0& arg)
+{
+    const static std::vector<GemmCase_f32_e8m0> saved = make_builtin_cases_gemm(arg);
     return saved;
 }
 

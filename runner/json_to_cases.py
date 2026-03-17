@@ -29,6 +29,10 @@ gemm_supported_ABC_types = {
     ("f32", "f32", "f32"),
     ("f16", "f16", "f32"),
     ("f16", "f16", "f16"),
+    ("bf16", "bf16", "f32"),
+    ("e4m3", "e4m3", "f32"),
+    ("e5m2", "e5m2", "f32"),
+    ("e8m0", "e8m0", "f32"),
 }
 
 gemv_supported_ABC_types = {
@@ -38,6 +42,10 @@ gemv_supported_ABC_types = {
 ctype_table = {
     "f16": "__half",
     "f32": "float",
+    "bf16": "__nv_bfloat16",
+    "e4m3": "exo_e4m3",
+    "e5m2": "exo_e5m2",
+    "e8m0": "exo_e8m0",
 }
 
 
@@ -324,7 +332,7 @@ for gemm_case in user_gemm_cases:
 # We previously already generated the wrapper run_* functions.
 for abc_types in sorted(gemm_supported_ABC_types):
     A, B, C = abc_types
-    assert A == B
+    assert A == B, "TODO test mixed e4m3 and e5m2?"
     c_lines.append(f"const std::vector<GemmCase_{C}_{A}>& get_user_cases(const GemmCase_{C}_{A}&)")
     c_lines.append("{")
     c_lines.append(f"  static const std::vector<GemmCase_{C}_{A}> result {{")

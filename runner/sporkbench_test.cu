@@ -37,7 +37,12 @@ __global__ void device_init_test_data(
                     value = k == mn ? T(1 + z) : T(0);
                     break;
                   case TestDataCode::tiled_numbers:
-                    value = T((k % 64) + 100 * (mn % 64));
+                    if constexpr (sizeof(T) >= 2) {
+                        value = T((k % 64) + 100 * (mn % 64));
+                    }
+                    else {
+                        value = T((k % 4) + 4 * (mn % 4));
+                    }
                     break;
                   case TestDataCode::signs_only:
                     {
@@ -52,7 +57,7 @@ __global__ void device_init_test_data(
                         if (randbits % 100'000u == 0) {
                             // 1 in 100'000 chance of a "big" value.
                             // This greatly reduces the chance that a genuine bug is mistaken for fp error.
-                            value = sizeof(T) >= 4 ? T(1000) : T(9);
+                            value = sizeof(T) >= 4 ? T(1000) : T(24);
                         }
                         else if (randbits % 4u != 0u) {
                             value = T(0);  // 75% chance of a 0
@@ -60,7 +65,9 @@ __global__ void device_init_test_data(
                         else {
                             // 25% chance of random value [0, 1], biased towards small numbers.
                             value = T((pcg3d(k, mn, 19980724) % 1'000'000) * 1e-6f);
-                            value = (value * value) * (value * value);
+                            if constexpr(sizeof(T) >= 2) {
+                                value = (value * value) * (value * value);
+                            }
                         }
                     }
                     break;

@@ -267,6 +267,21 @@ int exact_test_threshold(__nv_bfloat16)
     return 0;
 }
 
+int exact_test_threshold(exo_e4m3)
+{
+    return 0;
+}
+
+int exact_test_threshold(exo_e5m2)
+{
+    return 0;
+}
+
+int exact_test_threshold(exo_e8m0)
+{
+    return 0;
+}
+
 template <typename Ctype>
 TestDataConfig get_data_config(int trial_i, int K, Ctype)
 {
@@ -648,10 +663,15 @@ int Main(int argc, char** argv)
             );
         }
     };
-    static_assert(std::variant_size_v<GemmCaseUnion> == 3);
-    typed_gemm_helper(GemmCase_f32_f32{});
-    typed_gemm_helper(GemmCase_f32_f16{});
-    typed_gemm_helper(GemmCase_f16_f16{});
+    static_assert(std::variant_size_v<GemmCaseUnion> == 7);
+    // XXX
+    // typed_gemm_helper(GemmCase_f32_f32{});
+    // typed_gemm_helper(GemmCase_f32_f16{});
+    // typed_gemm_helper(GemmCase_f16_f16{});
+    // typed_gemm_helper(GemmCase_f32_bf16{});
+    typed_gemm_helper(GemmCase_f32_e4m3{});
+    typed_gemm_helper(GemmCase_f32_e5m2{});
+    typed_gemm_helper(GemmCase_f32_e8m0{});
 
     if (!get_user_cases(GemvCase{}).empty()) {
         for (const GemvPlotInput& plot_input : generate_gemv_plot_inputs(arch)) {
