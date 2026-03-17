@@ -13,8 +13,11 @@ from exo.scalars import e4m3, e5m2, e8m0, bf16, f16, f32
 
 from typing import List
 
-def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, cases: List[dict]):
+def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, A_mode: str, cases: List[dict]):
     # K_split added for API compatibility; for now, K_split=1.
+
+    assert A_mode in ("rmem", "row")
+    A_is_rmem = (A_mode == "rmem")
 
     smem_M = 128
     smem_N = 256
@@ -93,6 +96,10 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                     A_smem : A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
                     B_smem : B_type[ncta_M, ncta_N, RING, tile_N / 64, smem_K, 64] @ Sm90_SmemSwizzled(128)
 
+                    # Distributed dims: [CTA m, CTA n, 2 warpgroups, 4 warps]
+                    # Each warp holds (wg_M/64)-many [16, smem_K]-sized tiles.
+                    A_rmem: A_type[ncta_M, ncta_N, 2, 4, wg_M/64, 16, smem_K] @ Sm90_TkRmemTileA(smem_K)
+
                     # This loop should be cut at 1.
                     for iter_k in seq(0, (cluster_K + smem_K - 1) / smem_K):
                         with CudaWarps(0, 1, name="producer"):
@@ -127,25 +134,57 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                     ) >> raw[:,cta_n]
                                 for cta_m in cuda_threads(0, ncta_M, unit=cuda_cta_in_cluster):
                                     Arrive(cuda_temporal) >> raw[cta_m,:] >> raw[:,cta_n]
+                        # End CudaWarps(0, 1, name="producer")
                         with CudaWarps(name="consumer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
                                     Await(raw[cta_m,cta_n], cuda_generic_and_async_proxy, ~0)
 
-                                    for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
-                                        Fence(wgmma_fence_1, wgmma_fence_2)
-                                        for ms in seq(0, wg_M / 64, pragma_unroll=0):
-                                            Sm90_tk_mma_row_row(
-                                                D_rmem[cta_m, cta_n, wg_m, :, ms, :, :],
-                                                A_smem[cta_m, cta_n, iter_k % RING, (wg_m*wg_M): ((wg_m+1)*wg_M), :],
-                                                B_smem[cta_m, cta_n, iter_k % RING, :, :, :],
-                                                D=D_type, A=A_type, B=B_type, N64=wg_N // 64, K=smem_K,
-                                            )
-                                        Arrive(wgmma_async) >> cg[cta_m,cta_n,wg_m]
-                                        if iter_k >= 1:
-                                            Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
+                                    if A_is_rmem:
+                                        # A in RMEM case
+                                        # Totally not efficient; just testing for now.
+                                        for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
+                                            for w in cuda_threads(0, 4, unit=cuda_warp):
+                                                for ms in seq(0, wg_M / 64, pragma_unroll=0):
+                                                    cuda_tk_load_rs_inner_cols_64(
+                                                        A_rmem[cta_m, cta_n, wg_m, w, ms, :, :],
+                                                        A_smem[cta_m, cta_n,
+                                                               iter_k % RING :
+                                                               iter_k % RING + 1,
+                                                               wg_m * wg_M + ms * 64 + w * 16 :
+                                                               wg_m * wg_M + ms * 64 + w * 16 + 16,
+                                                               :],
+                                                        dst=A_type, src=A_type, rows=16, outer_cols=1,
+                                                    )
+                                            Fence(wgmma_fence_1, wgmma_fence_2)
+                                            for ms in seq(0, wg_M / 64, pragma_unroll=0):
+                                                Sm90_tk_mma_rmem_row(
+                                                    D_rmem[cta_m, cta_n, wg_m, :, ms, :, :],
+                                                    A_rmem[cta_m, cta_n, wg_m, :, ms, :, :],
+                                                    B_smem[cta_m, cta_n, iter_k % RING, :, :, :],
+                                                    D=D_type, A=A_type, B=B_type, N64=wg_N // 64, K=smem_K,
+                                                )
+                                            Arrive(wgmma_async) >> cg[cta_m,cta_n,wg_m]
+                                            Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 0)
+                                        # End A in RMEM case
+                                    else:
+                                        # A in SMEM case (normal)
+                                        for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
+                                            Fence(wgmma_fence_1, wgmma_fence_2)
+                                            for ms in seq(0, wg_M / 64, pragma_unroll=0):
+                                                Sm90_tk_mma_row_row(
+                                                    D_rmem[cta_m, cta_n, wg_m, :, ms, :, :],
+                                                    A_smem[cta_m, cta_n, iter_k % RING, (wg_m*wg_M): ((wg_m+1)*wg_M), :],
+                                                    B_smem[cta_m, cta_n, iter_k % RING, :, :, :],
+                                                    D=D_type, A=A_type, B=B_type, N64=wg_N // 64, K=smem_K,
+                                                )
+                                            Arrive(wgmma_async) >> cg[cta_m,cta_n,wg_m]
+                                            if iter_k >= 1:
+                                                Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
+                                        # End A in SMEM case
 
                                     Arrive(cuda_in_order) >> war[cta_m,:] >> war[:,cta_n]
+                        # End CudaWarps(name="consumer")
                     # end for iter_k
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -188,10 +227,13 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                     Fence(cuda_in_order, cuda_in_order)
 
     # Give unique name and specialize 0th k-iter due to scale_d ptxas issues.
-    p = rename(p, f"xgemm_Sm90a_{D_type}_{A_type}_{B_type}_m{ncta_M}n{ncta_N}_row_row")
+    p = rename(p, f"xgemm_Sm90a_{D_type}_{A_type}_{B_type}_m{ncta_M}n{ncta_N}_{A_mode}_row")
     p = simplify(p)
     p = unroll_loop(p, p.find_loop("sn_tma"))  # TODO should not be needed.
     p = cut_loop(p, p.find_loop("iter_k"), 1)
+
+    if not A_is_rmem:
+        p = delete_buffer(p, "A_rmem")
 
     # Timed sync check
     t = time.time()
@@ -200,6 +242,8 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
         p.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
     dt = time.time() - t
     print("%.3f s, %s" % (dt, p.name()))
+
+    A_major = "col" if A_mode == "col" else "row"
 
     # sporkbench cases
     if cases is not None:
@@ -212,7 +256,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
             "N_divisor": cluster_N,
             "proc": p.name(),
             "args": ["L", "M", "N", "K_split", "K_cluster", "A", "B", "C"],
-            "A_major": "row", "B_major": "row", "C_major": "row",
+            "A_major": A_major, "B_major": "row", "C_major": "row",
         }
         if not enable_split_k:
             j_case["K_split_max"] = 1
@@ -222,20 +266,24 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
 
 cases = []
 
-gemm_m1n1_f32_f16 = make_Sm90a_generic_gemm(1, 1, f32, f16, f16, cases)
-# gemm_m1n2_f32_f16 = make_Sm90a_generic_gemm(1, 2, f32, f16, f16, cases)
-# gemm_m2n1_f32_f16 = make_Sm90a_generic_gemm(2, 1, f32, f16, f16, cases)
-# gemm_m2n2_f32_f16 = make_Sm90a_generic_gemm(2, 2, f32, f16, f16, cases)
+gemm_m1n1_f32_bf16_rmem_row = make_Sm90a_generic_gemm(1, 1, f32, bf16, bf16, "rmem", cases)
+gemm_m2n1_f32_bf16_rmem_row = make_Sm90a_generic_gemm(2, 1, f32, bf16, bf16, "rmem", cases)
 
-gemm_m1n1_f32_bf16 = make_Sm90a_generic_gemm(1, 1, f32, bf16, bf16, cases)
-# gemm_m1n2_f32_bf16 = make_Sm90a_generic_gemm(1, 2, f32, bf16, bf16, cases)
-gemm_m2n1_f32_bf16 = make_Sm90a_generic_gemm(2, 1, f32, bf16, bf16, cases)
-# gemm_m2n2_f32_bf16 = make_Sm90a_generic_gemm(2, 2, f32, bf16, bf16, cases)
+gemm_m1n1_f32_f16 = make_Sm90a_generic_gemm(1, 1, f32, f16, f16, "row", cases)
+# gemm_m1n2_f32_f16 = make_Sm90a_generic_gemm(1, 2, f32, f16, f16, "row", cases)
+# gemm_m2n1_f32_f16 = make_Sm90a_generic_gemm(2, 1, f32, f16, f16, "row", cases)
+# gemm_m2n2_f32_f16 = make_Sm90a_generic_gemm(2, 2, f32, f16, f16, "row", cases)
 
-gemm_m1n1_f16_f16 = make_Sm90a_generic_gemm(1, 1, f16, f16, f16, cases)
-gemm_m1n2_f16_f16 = make_Sm90a_generic_gemm(1, 2, f16, f16, f16, cases)
-gemm_m2n1_f16_f16 = make_Sm90a_generic_gemm(2, 1, f16, f16, f16, cases)
-# gemm_m2n2_f16_f16 = make_Sm90a_generic_gemm(2, 2, f16, f16, f16, cases)
+gemm_m1n1_f32_bf16 = make_Sm90a_generic_gemm(1, 1, f32, bf16, bf16, "row", cases)
+# gemm_m1n2_f32_bf16 = make_Sm90a_generic_gemm(1, 2, f32, bf16, bf16, "row", cases)
+gemm_m2n1_f32_bf16 = make_Sm90a_generic_gemm(2, 1, f32, bf16, bf16, "row", cases)
+# gemm_m2n2_f32_bf16 = make_Sm90a_generic_gemm(2, 2, f32, bf16, bf16, "row", cases)
+
+gemm_m1n1_f16_f16 = make_Sm90a_generic_gemm(1, 1, f16, f16, f16, "row", cases)
+gemm_m1n2_f16_f16 = make_Sm90a_generic_gemm(1, 2, f16, f16, f16, "row", cases)
+gemm_m2n1_f16_f16 = make_Sm90a_generic_gemm(2, 1, f16, f16, f16, "row", cases)
+# gemm_m2n2_f16_f16 = make_Sm90a_generic_gemm(2, 2, f16, f16, f16, "row", cases)
+
 
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
