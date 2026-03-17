@@ -664,11 +664,10 @@ int Main(int argc, char** argv)
         }
     };
     static_assert(std::variant_size_v<GemmCaseUnion> == 7);
-    // XXX
-    // typed_gemm_helper(GemmCase_f32_f32{});
-    // typed_gemm_helper(GemmCase_f32_f16{});
-    // typed_gemm_helper(GemmCase_f16_f16{});
-    // typed_gemm_helper(GemmCase_f32_bf16{});
+    typed_gemm_helper(GemmCase_f32_f32{});
+    typed_gemm_helper(GemmCase_f32_f16{});
+    typed_gemm_helper(GemmCase_f16_f16{});
+    typed_gemm_helper(GemmCase_f32_bf16{});
     typed_gemm_helper(GemmCase_f32_e4m3{});
     typed_gemm_helper(GemmCase_f32_e5m2{});
     typed_gemm_helper(GemmCase_f32_e8m0{});
