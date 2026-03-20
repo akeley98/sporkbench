@@ -73,17 +73,16 @@ struct GemmEx
 
     static cudaDataType_t get_type_code(exo_e4m3)
     {
+        // Fix broken cublas fp8, we need to use tensor scaling.
+        throw std::runtime_error("TODO GemmEx::get_type_code(exo_e4m3)");
         return CUDA_R_8F_E4M3;
     }
 
     static cudaDataType_t get_type_code(exo_e5m2)
     {
+        // Fix broken cublas fp8, we need to use tensor scaling.
+        throw std::runtime_error("TODO GemmEx::get_type_code(exo_e5m2)");
         return CUDA_R_8F_E5M2;
-    }
-
-    static cudaDataType_t get_type_code(exo_e8m0)
-    {
-        throw std::runtime_error("TODO GemmEx::get_type_code(exo_e8m0)");
     }
 
     static void run(cublasHandle_t cublasH, GemmSize size, const ABtype* A, const ABtype* B, Ctype* C)
@@ -142,12 +141,7 @@ void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e5m2* A, c
     GemmEx<float, exo_e5m2, float>::run(cublasH, size, A, B, C);
 }
 
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e8m0* A, const exo_e8m0* B, float* C)
-{
-    GemmEx<float, exo_e8m0, float>::run(cublasH, size, A, B, C);
-}
-
-static_assert(std::variant_size_v<GemmCaseUnion> == 7, "Add more cublas cases");
+static_assert(std::variant_size_v<GemmCaseUnion> == 6, "Add more cublas cases");
 
 void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y)
 {
@@ -245,13 +239,6 @@ const std::vector<GemmCase_f32_e5m2>& get_builtin_cases(const GemmCase_f32_e5m2&
     const static std::vector<GemmCase_f32_e5m2> saved = make_builtin_cases_gemm(arg);
     return saved;
 }
-
-const std::vector<GemmCase_f32_e8m0>& get_builtin_cases(const GemmCase_f32_e8m0& arg)
-{
-    const static std::vector<GemmCase_f32_e8m0> saved = make_builtin_cases_gemm(arg);
-    return saved;
-}
-
 
 static const GemvCase builtin_gemv_cases[] = {
   GemvCase{

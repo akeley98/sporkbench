@@ -32,7 +32,6 @@ gemm_supported_ABC_types = {
     ("bf16", "bf16", "f32"),
     ("e4m3", "e4m3", "f32"),
     ("e5m2", "e5m2", "f32"),
-    ("e8m0", "e8m0", "f32"),
 }
 
 gemv_supported_ABC_types = {
@@ -45,7 +44,6 @@ ctype_table = {
     "bf16": "__nv_bfloat16",
     "e4m3": "exo_e4m3",
     "e5m2": "exo_e5m2",
-    "e8m0": "exo_e8m0",
 }
 
 

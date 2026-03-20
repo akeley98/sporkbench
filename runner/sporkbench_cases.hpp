@@ -5,8 +5,6 @@
 #define exo_e4m3 __nv_fp8_e4m3
 #define exo_e5m2 __nv_fp8_e5m2
 
-#define exo_e8m0 ::sporkbench::FAKE_TODO_E8M0
-
 #include <cublas_v2.h>
 #include <cuda_fp8.h>
 #include <cuda_bf16.h>
@@ -19,11 +17,6 @@
 namespace sporkbench {
 
 static_assert(!std::is_same_v<exo_e4m3, exo_e5m2>);
-
-struct FAKE_TODO_E8M0
-{
-    char fake;
-};
 
 inline const char* case_type_name(__nv_bfloat16)
 {
@@ -44,10 +37,6 @@ inline const char* case_type_name(exo_e4m3)
 inline const char* case_type_name(exo_e5m2)
 {
     return "e5m2";
-}
-inline const char* case_type_name(exo_e8m0)
-{
-    return "e8m0";
 }
 
 enum class CudaArch
@@ -164,7 +153,6 @@ using GemmCase_f16_f16 = GemmCaseT<__half, __half>;
 using GemmCase_f32_bf16 = GemmCaseT<float, exo_bf16>;
 using GemmCase_f32_e4m3 = GemmCaseT<float, exo_e4m3>;
 using GemmCase_f32_e5m2 = GemmCaseT<float, exo_e5m2>;
-using GemmCase_f32_e8m0 = GemmCaseT<float, exo_e8m0>;
 
 using GemmCaseUnion = std::variant<
         GemmCase_f32_f32,
@@ -172,8 +160,7 @@ using GemmCaseUnion = std::variant<
         GemmCase_f16_f16,
         GemmCase_f32_bf16,
         GemmCase_f32_e4m3,
-        GemmCase_f32_e5m2,
-        GemmCase_f32_e8m0>;
+        GemmCase_f32_e5m2>;
 
 // These are supposed to be generated from the user's JSON files.
 // Note the arg is just an unused dummy object to distinguish overloads.
@@ -183,7 +170,6 @@ const std::vector<GemmCase_f16_f16>& get_user_cases(const GemmCase_f16_f16&);
 const std::vector<GemmCase_f32_bf16>& get_user_cases(const GemmCase_f32_bf16&);
 const std::vector<GemmCase_f32_e4m3>& get_user_cases(const GemmCase_f32_e4m3&);
 const std::vector<GemmCase_f32_e5m2>& get_user_cases(const GemmCase_f32_e5m2&);
-const std::vector<GemmCase_f32_e8m0>& get_user_cases(const GemmCase_f32_e8m0&);
 // sporkbench_builtin_cases.cu
 const std::vector<GemmCase_f32_f32>& get_builtin_cases(const GemmCase_f32_f32&);
 const std::vector<GemmCase_f32_f16>& get_builtin_cases(const GemmCase_f32_f16&);
@@ -191,7 +177,6 @@ const std::vector<GemmCase_f16_f16>& get_builtin_cases(const GemmCase_f16_f16&);
 const std::vector<GemmCase_f32_bf16>& get_builtin_cases(const GemmCase_f32_bf16&);
 const std::vector<GemmCase_f32_e4m3>& get_builtin_cases(const GemmCase_f32_e4m3&);
 const std::vector<GemmCase_f32_e5m2>& get_builtin_cases(const GemmCase_f32_e5m2&);
-const std::vector<GemmCase_f32_e8m0>& get_builtin_cases(const GemmCase_f32_e8m0&);
 
 // TODO templatize gemv like gemm but I think no one actually cares.
 struct GemvCase
@@ -240,7 +225,6 @@ void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __half* A, con
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __nv_bfloat16* A, const __nv_bfloat16* B, float* C);
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e4m3* A, const exo_e4m3* B, float* C);
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e5m2* A, const exo_e5m2* B, float* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e8m0* A, const exo_e8m0* B, float* C);
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
 
 void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
