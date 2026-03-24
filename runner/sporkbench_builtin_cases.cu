@@ -4,7 +4,9 @@
 #include <cublas_v2.h>
 #include <stdexcept>
 #include <stdio.h>
+#include <string>
 #include <type_traits>
+#include <utility>
 
 #include "sporkbench_cutlass_Sm80.hpp"
 #include "sporkbench_kittens_mha_Sm90a.hpp"
@@ -15,7 +17,7 @@ namespace sporkbench {
 
 #define CUBLAS_CHECK(x) if (auto _cublas_status = x; _cublas_status != CUBLAS_STATUS_SUCCESS) { fprintf(stderr, "%s:%i cublas status %i\n", __FILE__, __LINE__, (int)_cublas_status); }
 
-template <typename Ctype, typename ABtype, typename ComputeType>
+template <int flags, typename Ctype, typename ABtype, typename ComputeType>
 struct GemmEx
 {
     static cublasComputeType_t get_compute_code(__half)
@@ -59,20 +61,39 @@ struct GemmEx
 
     static void run(cublasHandle_t cublasH, GemmSize size, const ABtype* A, const ABtype* B, Ctype* C)
     {
+        static_assert((flags & all_row_major_flags) == flags, "Unknown flag set");
+
+        bool A_row_major;
+        bool B_row_major;
+        if ((flags & C_row_major_flag)) {
+            // Output C of cublas is always column major.
+            // So if the user wants row-major output, we have to use the transpose identity AB = (BtAt)t
+            std::swap(A, B);
+            std::swap(size.M, size.N);
+            A_row_major = !(flags & B_row_major_flag);
+            B_row_major = !(flags & A_row_major_flag);
+        }
+        else {
+            A_row_major = (flags & A_row_major_flag);
+            B_row_major = (flags & B_row_major_flag);
+        }
+
         assert(cublasH);
-        cublasOperation_t transa = CUBLAS_OP_T;
-        cublasOperation_t transb = CUBLAS_OP_N;
+        cublasOperation_t transa = A_row_major ? CUBLAS_OP_T : CUBLAS_OP_N;
+        cublasOperation_t transb = B_row_major ? CUBLAS_OP_T : CUBLAS_OP_N;
         const ComputeType alpha = 1.0f;
         const ComputeType beta = 0.0f;
         const int M = int(size.M);
         const int N = int(size.N);
         const int K = int(size.K_split * size.K_cluster);
+        const int lda = A_row_major ? K : M;
+        const int ldb = B_row_major ? N : K;
         if (size.L == 1) {
             CUBLAS_CHECK(cublasGemmEx(
                     cublasH, transa, transb,
                     M, N, K, &alpha,
-                    A, get_type_code(ABtype{}), K,
-                    B, get_type_code(ABtype{}), K,
+                    A, get_type_code(ABtype{}), lda,
+                    B, get_type_code(ABtype{}), ldb,
                     &beta, C, get_type_code(Ctype{}), M,
                     get_compute_code(ComputeType{}), CUBLAS_GEMM_DEFAULT));
         }
@@ -80,42 +101,65 @@ struct GemmEx
             CUBLAS_CHECK(cublasGemmStridedBatchedEx(
                     cublasH, transa, transb,
                     M, N, K, &alpha,
-                    A, get_type_code(ABtype{}), K, M * K,
-                    B, get_type_code(ABtype{}), K, N * K,
+                    A, get_type_code(ABtype{}), lda, M * K,
+                    B, get_type_code(ABtype{}), ldb, N * K,
                     &beta, C, get_type_code(Ctype{}), M, M * N, size.L,
                     get_compute_code(ComputeType{}), CUBLAS_GEMM_DEFAULT));
         }
+    }
+
+    static GemmCaseT<Ctype, ABtype> make_case()
+    {
+        static const std::string static_case_name = (
+            std::string("cublas")
+            + ((flags & A_row_major_flag) ? ".Arow" : ".Acol")
+            + ((flags & B_row_major_flag) ? ".Brow" : ".Bcol")
+            + ((flags & C_row_major_flag) ? ".Crow" : ".Ccol")
+        );
+
+        return GemmCaseT<Ctype, ABtype>{
+          CudaArch::Sm80,
+          "sporkbench_builtin_cases.cu",
+          static_case_name.c_str(),
+          run,
+          flags,
+          1, INT32_MAX,  // L
+          1, INT32_MAX,  // M
+          1, INT32_MAX,  // N
+          1, 1,  // K_split: set to 1, so we don't sweep this parameter.
+          1, INT32_MAX,  // K_cluster
+        };
     }
 };
 
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C)
 {
-    GemmEx<float, float, float>::run(cublasH, size, A, B, C);
+    GemmEx<A_row_major_flag, float, float, float>::run(cublasH, size, A, B, C);
 }
 
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __half* A, const __half* B, float* C)
 {
-    GemmEx<float, __half, float>::run(cublasH, size, A, B, C);
+    GemmEx<A_row_major_flag, float, __half, float>::run(cublasH, size, A, B, C);
 }
 
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __half* A, const __half* B, __half* C)
 {
-    GemmEx<__half, __half, __half>::run(cublasH, size, A, B, C);
+    GemmEx<A_row_major_flag, __half, __half, __half>::run(cublasH, size, A, B, C);
 }
 
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __nv_bfloat16* A, const __nv_bfloat16* B, float* C)
 {
-    GemmEx<float, exo_bf16, float>::run(cublasH, size, A, B, C);
+    GemmEx<A_row_major_flag, float, exo_bf16, float>::run(cublasH, size, A, B, C);
 }
 
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e4m3* A, const exo_e4m3* B, float* C)
 {
-    GemmEx<float, exo_e4m3, float>::run(cublasH, size, A, B, C);
+    GemmEx<A_row_major_flag, float, exo_e4m3, float>::run(cublasH, size, A, B, C);
 }
 
 void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e5m2* A, const exo_e5m2* B, float* C)
 {
-    GemmEx<float, exo_e5m2, float>::run(cublasH, size, A, B, C);
+    GemmEx<A_row_major_flag, float, exo_e5m2, float>::run(cublasH, size, A, B, C);
 }
 
 static_assert(std::variant_size_v<GemmCaseUnion> == 6, "Add more cublas cases");
@@ -143,19 +187,16 @@ static void run_pldi_Sm80_edited_exo_gemm(cublasHandle_t, GemmSize size, const _
 template <typename Ctype, typename ABtype>
 std::vector<GemmCaseT<Ctype, ABtype>> make_builtin_cases_gemm(const GemmCaseT<Ctype, ABtype>&)
 {
+    static_assert(all_row_major_flags == 7, "Update GemmEx case list");
     std::vector<GemmCaseT<Ctype, ABtype>> result {
-      GemmCaseT<Ctype, ABtype>{
-        CudaArch::Sm80,
-        "sporkbench_builtin_cases.cu",
-        "cublas_gemm",
-        run_cublas_gemm,
-        A_row_major_flag,
-        1, INT32_MAX,  // L
-        1, INT32_MAX,  // M
-        1, INT32_MAX,  // N
-        1, 1,  // K_split: set to 1, so we don't sweep this parameter.
-        1, INT32_MAX,  // K_cluster
-      },
+      GemmEx<0, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<1, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<2, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<3, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<4, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<5, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<6, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<7, Ctype, ABtype, Ctype>::make_case(),
     };
 
     if constexpr (std::is_same_v<ABtype, float> || std::is_same_v<ABtype, __half>) {

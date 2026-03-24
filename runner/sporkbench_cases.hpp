@@ -114,6 +114,7 @@ using AttnFwdRunT = void(*)(AttnFwdSize size, T_type* O, L_type* l_vec, const T_
 constexpr int A_row_major_flag = 1;
 constexpr int B_row_major_flag = 2;
 constexpr int C_row_major_flag = 4;
+constexpr int all_row_major_flags = 7;
 
 template <typename Ctype, typename ABtype>
 struct GemmCaseT
@@ -204,6 +205,7 @@ struct GemvCase
     int M_max;
     int K_divisor;
     int K_max;
+    int flags = 0;
 
     // For now we hard-wire all gemv kernels not to do split K.
     static constexpr int K_split_divisor = 1;
@@ -251,6 +253,7 @@ struct AttnFwdCaseT
     int Groups_max;
     int SeqLen_divisor;
     int SeqLen_max;
+    int flags = 0;
 
     bool supports(AttnFwdSize size) const
     {

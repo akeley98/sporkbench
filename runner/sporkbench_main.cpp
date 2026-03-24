@@ -280,8 +280,19 @@ std::vector<KernelCaseEntry<KernelCase>> generate_cases(
             entry.is_builtin = true;
         }
 
-        if (false) {
-            // TODO: add mechanism to filter out kernels.
+        bool retain_builtin = true;
+        if (entry.is_builtin) {
+            // Only benchmark user gemms with builtin gemms of the same majorness.
+            const auto builtin_flags =entry.p_case->flags;
+            auto pred = [builtin_flags] (const KernelCase& user_case)
+            {
+                return builtin_flags == user_case.flags;
+            };
+            retain_builtin = std::any_of(user_cases.cbegin(), user_cases.cend(), pred);
+        }
+
+        if (!retain_builtin) {
+            // TODO: add manual mechanisms to filter out kernels.
         }
         else if (!cuda_arch_supports(entry.p_case->cuda_arch, cuda_cc_major, cuda_cc_minor)) {
             // Skip unsupported architectures.
