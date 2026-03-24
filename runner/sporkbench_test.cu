@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <vector>
 
+#include "sporkbench_cublas_gemm.hpp"
 #include "sporkbench_pcg3d.hpp"
 
 #include "sporkbench_kittens_mha_Sm90a.hpp"  // TODO replace with cuDNN
@@ -102,10 +103,12 @@ __global__ void device_compare_tensor_test_init_bitfield(unsigned long long* d_b
 // Requires that *d_bitfield is initialized to UINT64_MAX.
 // Compare the two equal-sized matrices and, if any comparison failures, put the coordinates of the wrong value
 // into *d_bitfield, packed as its linear_index into the d_expected array.
-// d_expected is always column major. d_test is described by the test_row_major flag.
+// d_expected and d_test are described by the row_major flag.
+//
+// NOTE: d_expected used to be hard-wired as column major. If any comments describe this, they are outdated.
 template <typename Test, typename Expected>
 __global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, const Expected* d_expected,
-                                           bool test_row_major, bool exact, unsigned long long* d_bitfield)
+                                           bool row_major, bool exact, unsigned long long* d_bitfield)
 {
     uint32_t tid_x = threadIdx.x + blockIdx.x * blockDim.x;
     uint32_t tid_y = threadIdx.y + blockIdx.y * blockDim.y;
@@ -113,18 +116,20 @@ __global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, co
     for (uint32_t batch = tid_z; batch < size.L; batch += blockDim.z * gridDim.z) {
         for (uint32_t m = tid_y; m < size.M; m += blockDim.y * gridDim.y) {
             for (uint32_t n = tid_x; n < size.N; n += blockDim.x * gridDim.x) {
-                const size_t expected_linear_index = size.C_col_major_index(batch, m, n);
-                size_t test_linear_index = expected_linear_index;
-                if (test_row_major) {
-                    test_linear_index = size.C_row_major_index(batch, m, n);
+                size_t linear_index;
+                if (row_major) {
+                    linear_index = size.C_row_major_index(batch, m, n);
+                }
+                else {
+                    linear_index = size.C_col_major_index(batch, m, n);
                 }
                 bool correct;
                 if (exact) {
-                    correct = d_test[test_linear_index] == d_expected[expected_linear_index];
+                    correct = d_test[linear_index] == d_expected[linear_index];
                 }
                 else {
-                    float f_test = float(d_test[test_linear_index]);
-                    float f_expected = float(d_expected[expected_linear_index]);
+                    float f_test = float(d_test[linear_index]);
+                    float f_expected = float(d_expected[linear_index]);
                     correct = f_test * f_expected >= 0.0f;  // Sign error, or inf/nan if wrong
                     if (correct) {
                         f_test = fabsf(f_test);
@@ -136,7 +141,7 @@ __global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, co
                     }
                 }
                 if (!correct) {
-                    atomicMin(d_bitfield, (unsigned long long)expected_linear_index);
+                    atomicMin(d_bitfield, (unsigned long long)linear_index);
                 }
             }
         }
@@ -145,7 +150,7 @@ __global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, co
 
 template <typename Test, typename Expected>
 __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, const Expected* d_expected,
-                                          bool test_row_major, uint32_t batch, uint32_t m, uint32_t n)
+                                          bool row_major, uint32_t batch, uint32_t m, uint32_t n)
 {
     uint32_t m_min = m < 2 ? 0u : m - 2;
     uint32_t m_max = m + 2 >= size.M ? size.M - 1u : m + 2;
@@ -157,13 +162,15 @@ __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, con
             if (cn == n && cm == m) {
                 printf("\x1b[1m");
             }
-            const size_t expected_linear_index = size.C_col_major_index(batch, cm, cn);
-            size_t test_linear_index = expected_linear_index;
-            if (test_row_major) {
-                test_linear_index = size.C_row_major_index(batch, cm, cn);
+            size_t linear_index;
+            if (row_major) {
+                linear_index = size.C_row_major_index(batch, cm, cn);
             }
-            const double f_test = static_cast<double>(d_test[test_linear_index]);
-            const double f_expected = static_cast<double>(d_expected[expected_linear_index]);
+            else {
+                linear_index = size.C_col_major_index(batch, cm, cn);
+            }
+            const double f_test = static_cast<double>(d_test[linear_index]);
+            const double f_expected = static_cast<double>(d_expected[linear_index]);
             printf("[%6g, %6g]  ", f_test, f_expected);
             if (cn == n && cm == m) {
                 printf("\x1b[0m");
@@ -178,22 +185,25 @@ __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, con
 // Print info on wrong value from function above.
 template <typename Test, typename Expected>
 __global__ void device_compare_tensor_test_print(GemmSize size, const Test* d_test, const Expected* d_expected,
-                                                 bool test_row_major, unsigned long long* d_bitfield)
+                                                 bool row_major, unsigned long long* d_bitfield)
 {
-    unsigned long long expected_linear_index = *d_bitfield;
-    if (expected_linear_index != UINT64_MAX) {
-        const uint32_t batch = expected_linear_index / (size.M * size.N);
-        const uint32_t n = (expected_linear_index / size.M) % size.N;
-        const uint32_t m = expected_linear_index % size.M;
-        unsigned long long test_linear_index = expected_linear_index;
-        if (test_row_major) {
-            test_linear_index = size.C_row_major_index(batch, m, n);
+    unsigned long long linear_index = *d_bitfield;
+    if (linear_index != UINT64_MAX) {
+        uint32_t batch, m, n;
+        batch = linear_index / (size.M * size.N);
+        if (row_major) {
+            m = (linear_index / size.N) % size.M;
+            n = linear_index % size.N;
         }
-        const double f_test = static_cast<double>(d_test[test_linear_index]);
-        const double f_expected = static_cast<double>(d_expected[expected_linear_index]);
+        else {
+            n = (linear_index / size.M) % size.N;
+            m = linear_index % size.M;
+        }
+        const double f_test = static_cast<double>(d_test[linear_index]);
+        const double f_expected = static_cast<double>(d_expected[linear_index]);
         printf("\x1b[1m[batch=%u, m=%u, n=%u]\x1b[0m %g != %g (test != expected)\n", batch, m, n, f_test, f_expected);
 
-        print_tensor_neighborhood(size, d_test, d_expected, test_row_major, batch, m, n);
+        print_tensor_neighborhood(size, d_test, d_expected, row_major, batch, m, n);
     }
 }
 
@@ -332,7 +342,14 @@ void init_test_data_impl(
     // K-major inputs required to initialize expected data.
     assert(resources.A_row_major);
     assert(resources.B_col_major);
-    run_cublas_gemm(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected);
+    if (resources.C_expected_row_major) {
+        using G = GemmEx<A_row_major_flag | C_row_major_flag, Ctype, ABtype, Ctype>;
+        G::run(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected_row_major);
+    }
+    if (resources.C_expected_col_major) {
+        using G = GemmEx<A_row_major_flag, Ctype, ABtype, Ctype>;
+        G::run(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected_col_major);
+    }
 }
 
 template <typename Ctype, typename ABtype>
@@ -357,10 +374,12 @@ TestResult gemm_case_visitor_impl(
 
     bool passed = true;
     if (check_mode != TestCheckMode::none) {
-        const bool test_row_major = bool(gemm_case.flags & C_row_major_flag);
+        const bool row_major = bool(gemm_case.flags & C_row_major_flag);
         const bool exact = (check_mode == TestCheckMode::exact);
+        const Ctype* C = row_major ? resources.C_expected_row_major : resources.C_expected_col_major;
+        assert(C);
         passed = launch_device_compare_tensor(
-                size, gemm_case.proc_name, resources.C_test, resources.C_expected, test_row_major, exact, stream);
+                size, gemm_case.proc_name, resources.C_test, C, row_major, exact, stream);
     }
 
     cudaStreamSynchronize(stream);

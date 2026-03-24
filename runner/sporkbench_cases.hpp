@@ -309,14 +309,6 @@ const std::vector<AttnFwdCase_bf16_f32_128_causal>& get_builtin_cases(const Attn
 
 
 // sporkbench_builtin_cases.cu
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __half* A, const __half* B, float* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __half* A, const __half* B, __half* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const __nv_bfloat16* A, const __nv_bfloat16* B, float* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e4m3* A, const exo_e4m3* B, float* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const exo_e5m2* A, const exo_e5m2* B, float* C);
-void run_cublas_gemm(cublasHandle_t cublasH, GemmSize size, const float* A, const float* B, float* C);
-
 void run_cublas_gemv(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
 
 }

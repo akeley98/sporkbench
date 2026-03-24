@@ -39,7 +39,8 @@ struct GemmTestResourcesT
     ABtype* A_col_major;
     ABtype* B_col_major;
     Ctype* C_test;
-    Ctype* C_expected;
+    Ctype* C_expected_row_major;
+    Ctype* C_expected_col_major;
     size_t L2_shred_bytes;
     void* L2_shred_memory;
 };

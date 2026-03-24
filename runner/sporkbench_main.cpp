@@ -454,7 +454,8 @@ void generate_gemm_plot_samples(
         printf("L = %i, MNK = [%i, %i, %i]\n", L, M, N, K);
         std::unique_ptr<char[], AsyncDeleter> unique_L2_shred_memory;
         std::unique_ptr<Ctype[], AsyncDeleter> unique_C_test;
-        std::unique_ptr<Ctype[], AsyncDeleter> unique_C_expected;
+        std::unique_ptr<Ctype[], AsyncDeleter> unique_C_expected_row_major;
+        std::unique_ptr<Ctype[], AsyncDeleter> unique_C_expected_col_major;
         std::unique_ptr<ABtype[], AsyncDeleter> unique_A_row_major;
         std::unique_ptr<ABtype[], AsyncDeleter> unique_B_row_major;
         std::unique_ptr<ABtype[], AsyncDeleter> unique_A_col_major;
@@ -462,7 +463,6 @@ void generate_gemm_plot_samples(
 
         init_alloc(unique_L2_shred_memory, 1, 1, L2_shred_bytes, deleter);
         init_alloc(unique_C_test, L, M, N, deleter);
-        init_alloc(unique_C_expected, L, M, N, deleter);
 
         // Allocate A column major, or B row major, only if some test case requires it.
         // A row major, B column major is required by our usage of cublas to generate expected output.
@@ -479,6 +479,14 @@ void generate_gemm_plot_samples(
             init_alloc(unique_B_col_major, L, N, K, deleter);
         }
 
+        // Similar logic for allocating C row major or column major.
+        if ((union_flags & C_row_major_flag)) {
+            init_alloc(unique_C_expected_row_major, L, M, N, deleter);
+        }
+        if ((union_not_flags & C_row_major_flag)) {
+            init_alloc(unique_C_expected_col_major, L, M, N, deleter);
+        }
+
         GemmTestResourcesT<Ctype, ABtype> resources{};
         resources.cublasH = main_data.cublasH;
         resources.start_event = main_data.start_event;
@@ -488,7 +496,8 @@ void generate_gemm_plot_samples(
         resources.B_row_major = unique_B_row_major.get();
         resources.B_col_major = unique_B_col_major.get();
         resources.C_test = unique_C_test.get();
-        resources.C_expected = unique_C_expected.get();
+        resources.C_expected_row_major = unique_C_expected_row_major.get();
+        resources.C_expected_col_major = unique_C_expected_col_major.get();
         resources.L2_shred_bytes = L2_shred_bytes;
         resources.L2_shred_memory = unique_L2_shred_memory.get();
 
