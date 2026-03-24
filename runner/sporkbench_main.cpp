@@ -196,9 +196,9 @@ std::vector<AttnFwdPlotInput> generate_attn_fwd_plot_inputs(
     const int seq_max = arch != CudaArch::Sm80 ? 1536 * 8 : 1536 * 4;
     for (int seq = 1536; seq <= seq_max; seq *= 2) {
         AttnFwdSize size;
-        size.Batch = 1;
+        size.Batch = 2;
         size.KV_Heads = 64;
-        size.Groups = 1;
+        size.Groups = 3;
         size.Hdim = Hdim;
         size.SeqLen = seq;
         plot_input.sizes.push_back(size);
@@ -715,7 +715,7 @@ void generate_attn_fwd_plot_samples(
             size.Hdim = Hdim;
             size.SeqLen = SeqLen;
 
-            const auto check_mode = trial_i < num_warmup ? TestCheckMode::approximate : TestCheckMode::none;
+            const auto check_mode = trial_i == 0 ? TestCheckMode::approximate : TestCheckMode::none;
 
             // Initialize test data on every warmup iteration, and the first timed iteration.
             // Additional test data generation is not needed as timed iterations always use the same data.

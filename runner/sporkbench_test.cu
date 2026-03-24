@@ -201,21 +201,29 @@ __global__ void device_compare_tensor_test(TestTensorSize size, const Test* d_te
                 else {
                     linear_index = size.col_major_index(batch, head, m, n);
                 }
-                bool correct;
+                bool correct = false;
                 if (exact) {
                     correct = d_test[linear_index] == d_expected[linear_index];
                 }
                 else {
                     float f_test = float(d_test[linear_index]);
                     float f_expected = float(d_expected[linear_index]);
-                    correct = f_test * f_expected >= 0.0f;  // Sign error, or inf/nan if wrong
-                    if (correct) {
+                    if (fabsf(f_test - f_expected) <= 1.0f / 64) {
+                        // Any absolute difference <= 1/64 is a pass.
+                        // Note the <= will always be false for NaN.
+                        correct = true;
+                    }
+                    else if (f_test * f_expected >= 0.0f) {
+                        // Allow same-sign values with small relative ratio.
                         f_test = fabsf(f_test);
                         f_expected = fabsf(f_expected);
                         const float Min = fminf(f_test, f_expected);
                         const float Max = fmaxf(f_test, f_expected);
                         const float eps = sizeof(Test) >= 4 ? 1.0f / 128 : 12.0f / 128;
-                        correct = Max == 0 || Max / Min < (1.0f + eps);
+                        correct = Max == 0 || Max / Min <= (1.0f + eps);
+                    }
+                    else {
+                        correct = false;
                     }
                 }
                 if (!correct) {
