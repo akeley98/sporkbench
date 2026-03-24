@@ -68,6 +68,31 @@ struct GemvTestResources
     void* L2_shred_memory;
 };
 
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+struct AttnFwdTestResourcesT
+{
+    cudaEvent_t start_event;
+    cudaEvent_t end_event;
+    T_type* d_O_test;
+    L_type* d_l_vec_test;
+    T_type* d_O_expected;
+    L_type* d_l_vec_expected;
+    T_type* d_Q;
+    T_type* d_K;
+    T_type* d_V;
+    size_t L2_shred_bytes;
+    void* L2_shred_memory;
+};
+
+static_assert(std::variant_size_v<AttnFwdCaseUnion> == 4, "Update AttnFwdCaseUnion");
+
+using AttnFwdTestResourcesUnion = std::variant<
+    AttnFwdTestResourcesT<exo_bf16, float, 64, false>,
+    AttnFwdTestResourcesT<exo_bf16, float, 64, true>,
+    AttnFwdTestResourcesT<exo_bf16, float, 128, false>,
+    AttnFwdTestResourcesT<exo_bf16, float, 128, true>
+>;
+
 void init_test_data(GemmTestResourcesUnion resources, GemmSize size, TestDataCode A_code, TestDataCode B_code);
 
 TestResult run_gemm_case(
@@ -77,5 +102,14 @@ void init_test_data(const GemvTestResources& resources, GemvSize size, TestDataC
 
 TestResult run_gemv_case(
         const GemvCase& gemv_case, const GemvTestResources& resources, GemvSize size, TestCheckMode check_mode);
+
+void init_test_data(
+        const AttnFwdTestResourcesUnion& resources, AttnFwdSize size,
+        TestDataCode Q_code, TestDataCode K_code, TestDataCode V_code);
+
+TestResult run_attn_fwd_case(
+        AttnFwdCaseUnion attn_fwd_case, AttnFwdTestResourcesUnion resources, AttnFwdSize size, TestCheckMode check_mode);
+
+
 
 }  // end namespace

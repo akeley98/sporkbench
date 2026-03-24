@@ -10,6 +10,8 @@
 
 #include "sporkbench_pcg3d.hpp"
 
+#include "sporkbench_kittens_mha_Sm90a.hpp"  // TODO replace with cuDNN
+
 namespace sporkbench {
 
 namespace sporkbench_test {
@@ -231,6 +233,7 @@ double run_gemm_case_impl(
         GemmSize size,
         cudaStream_t stream)
 {
+    // Update readme if you change the testing methodology.
     const uint32_t L = uint32_t(size.L);
     const uint32_t M = uint32_t(size.M);
     const uint32_t N = uint32_t(size.N);
@@ -272,6 +275,32 @@ double run_gemv_case_impl(
     return flops;
 }
 
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+double run_attn_fwd_case_impl(
+        const AttnFwdCaseT<T_type, L_type, Hdim, Causal>& attn_case,
+        const AttnFwdTestResourcesT<T_type, L_type, Hdim, Causal>& resources,
+        AttnFwdSize size,
+        cudaStream_t stream)
+{
+    // Update readme if you change the testing methodology.
+    cudaMemsetAsync(resources.L2_shred_memory, 0xCC, resources.L2_shred_bytes, stream);
+    cudaEventRecord(resources.start_event, stream);
+    assert(stream == 0);  // Change run_function to take stream argument.
+    attn_case.run_function(
+            size, resources.d_O_test, resources.d_l_vec_test,
+            resources.d_Q, resources.d_K, resources.d_V);
+    cudaEventRecord(resources.end_event, stream);
+
+    cudaStreamSynchronize(stream);
+    float ms;
+    cudaEventElapsedTime(&ms, resources.start_event, resources.end_event);
+
+    // Only counted tensor flops
+    const auto qk_macs = size.SeqLen * size.SeqLen * Hdim;
+    const auto so_macs = size.SeqLen * size.SeqLen * Hdim;
+    const double flops = double(size.Batch * size.KV_Heads * size.Groups) * (qk_macs + so_macs) * 2000.0 / ms;
+    return flops;
+}
 
 }  // end namespace sporkbench_test
 
@@ -409,6 +438,93 @@ TestResult run_gemv_case(
     result.flops = flops;
     result.passed = passed;
     return result;
+}
+
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+void init_test_data_impl(
+        const AttnFwdTestResourcesT<T_type, L_type, Hdim, Causal>& resources, AttnFwdSize size,
+        TestDataCode Q_code, TestDataCode K_code, TestDataCode V_code)
+{
+    using namespace ::sporkbench::sporkbench_test;
+    const auto qo_heads = size.KV_Heads * size.Groups;
+    const auto kv_heads = size.KV_Heads;
+    const cudaStream_t stream{};
+    assert(size.Hdim == Hdim);
+    launch_init_test_data(resources.d_Q, size.Batch * qo_heads, size.SeqLen, Hdim, true, Q_code, stream);
+    launch_init_test_data(resources.d_K, size.Batch * kv_heads, size.SeqLen, Hdim, true, K_code, stream);
+    launch_init_test_data(resources.d_V, size.Batch * kv_heads, size.SeqLen, Hdim, true, V_code, stream);
+
+    // TODO use cuDNN or something so we don't rely on H100.
+    kittens_mha_h100::attention_forward(
+        size.Batch, size.KV_Heads, size.Groups, size.SeqLen, Hdim, Causal,
+        resources.d_O_expected, resources.d_l_vec_expected, resources.d_Q, resources.d_K, resources.d_V,
+        stream);
+}
+
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+TestResult attn_fwd_case_visitor_impl(
+        const AttnFwdCaseT<T_type, L_type, Hdim, Causal>& attn_case,
+        const AttnFwdTestResourcesUnion& resources_union,
+        AttnFwdSize size,
+        TestCheckMode check_mode)
+{
+    using namespace ::sporkbench::sporkbench_test;
+    using Resources = AttnFwdTestResourcesT<T_type, L_type, Hdim, Causal>;
+    const Resources resources = std::get<Resources>(resources_union);
+    const auto qo_heads = size.KV_Heads * size.Groups;
+
+    const cudaStream_t stream = 0;
+
+    // Fill output matrices with garbage.
+    if (check_mode != TestCheckMode::none) {
+        cudaMemsetAsync(
+                resources.d_O_test, 0xDD,
+                sizeof(resources.d_O_test[0]) * size.Batch * qo_heads * size.SeqLen * Hdim,
+                stream);
+        cudaMemsetAsync(
+                resources.d_l_vec_test, 0xDD,
+                sizeof(resources.d_l_vec_test[0]) * size.Batch * qo_heads * size.SeqLen,
+                stream);
+    }
+
+    const double flops = run_attn_fwd_case_impl(attn_case, resources, size, stream);
+
+    bool passed = true;
+    if (check_mode != TestCheckMode::none) {
+        fprintf(stderr, "TODO check attention correctness\n");
+    }
+
+    cudaStreamSynchronize(stream);
+    cudaError_t err = cudaGetLastError();
+    if (err) {
+        throw std::runtime_error(cudaGetErrorString(err));
+    }
+    TestResult result{};
+    result.flops = flops;
+    result.passed = passed;
+    return result;
+}
+
+
+void init_test_data(
+        const AttnFwdTestResourcesUnion& resources, AttnFwdSize size,
+        TestDataCode Q_code, TestDataCode K_code, TestDataCode V_code)
+{
+    auto visitor = [&] (auto typed_resources)
+    {
+        init_test_data_impl(typed_resources, size, Q_code, K_code, V_code);
+    };
+    return std::visit(visitor, resources);
+}
+
+TestResult run_attn_fwd_case(
+        AttnFwdCaseUnion attn_fwd_case, AttnFwdTestResourcesUnion resources, AttnFwdSize size, TestCheckMode check_mode)
+{
+    auto visitor = [&] (auto typed_case)
+    {
+        return attn_fwd_case_visitor_impl(typed_case, resources, size, check_mode);
+    };
+    return std::visit(visitor, attn_fwd_case);
 }
 
 }  // end namespace sporkbench

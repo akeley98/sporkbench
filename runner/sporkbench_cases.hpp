@@ -43,7 +43,7 @@ enum class CudaArch
 {
     Sm80,
     Sm90a,
-    Sm100a,
+    Sm100a,  // TODO
 };
 
 inline const char* arch_name(CudaArch arch)
@@ -91,10 +91,25 @@ struct GemvSize
     int M, K;
 };
 
+struct AttnFwdSize
+{
+    int Batch, KV_Heads, Groups, Hdim, SeqLen;
+    // Q[Batch, KV_Heads, Groups, SeqLen, Hdim]; `KV_Heads * Groups` is the total number of heads
+    // K[Batch, KV_Heads, SeqLen, Hdim]; `KV_Heads` is the total number of heads
+    // V[Batch, KV_Heads, SeqLen, Hdim]; `KV_Heads` is the total number of heads
+    // O[Batch, KV_Heads, Groups, SeqLen, Hdim]; `KV_Heads * Groups` is the total number of heads
+    // l_vec[Batch, KV_Heads, Groups, SeqLen]; `KV_Heads * Groups` is the total number of heads
+    //
+    // Rightmost stride is 1.
+};
+
 template <typename Ctype, typename ABtype>
 using GemmRunT = void(*)(cublasHandle_t cublasH, GemmSize size, const ABtype* A, const ABtype* B, Ctype* C);
 
 typedef void (*GemvRun)(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
+
+template <typename T_type, typename L_type, int Hdim>
+using AttnFwdRunT = void(*)(AttnFwdSize size, T_type* O, L_type* l_vec, const T_type* Q, const T_type* K, const T_type* V);
 
 constexpr int A_row_major_flag = 1;
 constexpr int B_row_major_flag = 2;
@@ -216,6 +231,78 @@ const std::vector<GemvCase_f32_f32>& get_user_cases(const GemvCase_f32_f32&);
 // sporkbench_builtin_cases.cu
 const std::vector<GemvCase_f32_f32>& get_builtin_cases(const GemvCase_f32_f32&);
 
+template <typename T_type, typename L_type, int Hdim_, bool Causal_>
+struct AttnFwdCaseT
+{
+    static constexpr bool Causal = Causal_;
+    static constexpr int Hdim = Hdim_;
+    static constexpr int K_split_divisor = 1;
+    static constexpr int K_split_max = 1;
+
+    CudaArch cuda_arch;
+    const char* json_name;
+    const char* proc_name;
+    AttnFwdRunT<T_type, L_type, Hdim_> run_function;
+    int Batch_divisor;
+    int Batch_max;
+    int KV_Heads_divisor;
+    int KV_Heads_max;
+    int Groups_divisor;
+    int Groups_max;
+    int SeqLen_divisor;
+    int SeqLen_max;
+
+    bool supports(AttnFwdSize size) const
+    {
+        return (
+            size.Batch <= Batch_max &&
+            size.Batch % Batch_divisor == 0 &&
+            size.KV_Heads <= KV_Heads_max &&
+            size.KV_Heads % KV_Heads_divisor == 0 &&
+            size.Hdim == Hdim &&
+            size.SeqLen <= SeqLen_max &&
+            size.SeqLen % SeqLen_divisor == 0
+        );
+    }
+
+    bool supports_split_k() const
+    {
+        return false;
+    }
+
+    static const char* t_type_name()
+    {
+        return case_type_name(T_type{});
+    }
+
+    static const char* l_type_name()
+    {
+        return case_type_name(L_type{});
+    }
+};
+
+using AttnFwdCase_bf16_f32_64 = AttnFwdCaseT<exo_bf16, float, 64, false>;
+using AttnFwdCase_bf16_f32_128 = AttnFwdCaseT<exo_bf16, float, 128, false>;
+using AttnFwdCase_bf16_f32_64_causal = AttnFwdCaseT<exo_bf16, float, 64, true>;
+using AttnFwdCase_bf16_f32_128_causal = AttnFwdCaseT<exo_bf16, float, 128, true>;
+
+using AttnFwdCaseUnion = std::variant<
+        AttnFwdCase_bf16_f32_64,
+        AttnFwdCase_bf16_f32_128,
+        AttnFwdCase_bf16_f32_64_causal,
+        AttnFwdCase_bf16_f32_128_causal>;
+
+// These are supposed to be generated from the user's JSON files.
+// Note the arg is just an unused dummy object to distinguish overloads.
+const std::vector<AttnFwdCase_bf16_f32_64>& get_user_cases(const AttnFwdCase_bf16_f32_64&);
+const std::vector<AttnFwdCase_bf16_f32_128>& get_user_cases(const AttnFwdCase_bf16_f32_128&);
+const std::vector<AttnFwdCase_bf16_f32_64_causal>& get_user_cases(const AttnFwdCase_bf16_f32_64_causal&);
+const std::vector<AttnFwdCase_bf16_f32_128_causal>& get_user_cases(const AttnFwdCase_bf16_f32_128_causal&);
+// sporkbench_builtin_cases.cu
+const std::vector<AttnFwdCase_bf16_f32_64>& get_builtin_cases(const AttnFwdCase_bf16_f32_64&);
+const std::vector<AttnFwdCase_bf16_f32_128>& get_builtin_cases(const AttnFwdCase_bf16_f32_128&);
+const std::vector<AttnFwdCase_bf16_f32_64_causal>& get_builtin_cases(const AttnFwdCase_bf16_f32_64_causal&);
+const std::vector<AttnFwdCase_bf16_f32_128_causal>& get_builtin_cases(const AttnFwdCase_bf16_f32_128_causal&);
 
 
 // sporkbench_builtin_cases.cu

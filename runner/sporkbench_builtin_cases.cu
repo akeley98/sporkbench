@@ -7,6 +7,7 @@
 #include <type_traits>
 
 #include "sporkbench_cutlass_Sm80.hpp"
+#include "sporkbench_kittens_mha_Sm90a.hpp"
 
 #include "pldi_Sm80_edited/exocc_Sm80_edited.h"
 
@@ -256,6 +257,61 @@ const std::vector<GemvCase>& get_builtin_cases(const GemvCase&)
     constexpr size_t N = sizeof(builtin_gemv_cases) / sizeof(builtin_gemv_cases[0]);
     static const std::vector<GemvCase> result(&builtin_gemv_cases[0], &builtin_gemv_cases[N]);
     return result;
+}
+
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+std::vector<AttnFwdCaseT<T_type, L_type, Hdim, Causal>>
+make_builtin_cases_attn_fwd()
+{
+    auto kittens_run = [] (
+            AttnFwdSize size, exo_bf16* O, float* l_vec, const exo_bf16* Q, const exo_bf16* K, const exo_bf16* V)
+    {
+        cudaStream_t exo_cudaStream{};
+        kittens_mha_h100::attention_forward(
+                size.Batch, size.KV_Heads, size.Groups, size.SeqLen, size.Hdim, Causal,
+                O, l_vec, const_cast<exo_bf16*>(Q), const_cast<exo_bf16*>(K), const_cast<exo_bf16*>(V),
+                exo_cudaStream);
+    };
+
+    AttnFwdCaseT<T_type, L_type, Hdim, Causal> kittens_case{};
+    kittens_case.cuda_arch = CudaArch::Sm90a;
+    kittens_case.json_name = "sporkbench_builtin_cases.cu";
+    kittens_case.proc_name = "kittens_mha_h100_attention_forward";
+    kittens_case.run_function = kittens_run;
+    kittens_case.Batch_divisor = 1;
+    kittens_case.Batch_max = INT32_MAX;
+    kittens_case.KV_Heads_divisor = 1;
+    kittens_case.KV_Heads_max = INT32_MAX;
+    kittens_case.Groups_divisor = 1;
+    kittens_case.Groups_max = INT32_MAX;
+    kittens_case.SeqLen_divisor = 16;
+    kittens_case.SeqLen_max = INT32_MAX;
+    std::vector<AttnFwdCaseT<T_type, L_type, Hdim, Causal>> cases{kittens_case};
+    return cases;
+}
+
+const std::vector<AttnFwdCase_bf16_f32_64>& get_builtin_cases(const AttnFwdCase_bf16_f32_64&)
+{
+    const static auto saved = make_builtin_cases_attn_fwd<exo_bf16, float, 64, false>();
+    return saved;
+}
+
+const std::vector<AttnFwdCase_bf16_f32_128>& get_builtin_cases(const AttnFwdCase_bf16_f32_128&)
+{
+    const static auto saved = make_builtin_cases_attn_fwd<exo_bf16, float, 128, false>();
+    return saved;
+}
+
+const std::vector<AttnFwdCase_bf16_f32_64_causal>& get_builtin_cases(const AttnFwdCase_bf16_f32_64_causal&)
+{
+    const static auto saved = make_builtin_cases_attn_fwd<exo_bf16, float, 64, true>();
+    return saved;
+}
+
+const std::vector<AttnFwdCase_bf16_f32_128_causal>& get_builtin_cases(const AttnFwdCase_bf16_f32_128_causal&)
+{
+    const static auto saved = make_builtin_cases_attn_fwd<exo_bf16, float, 128, true>();
+    return saved;
 }
 
 }  // end namespace

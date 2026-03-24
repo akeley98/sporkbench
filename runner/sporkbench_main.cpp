@@ -52,7 +52,7 @@ struct GemmPlotInput
     std::string name;
     std::string title;
     std::string x_axis;
-    std::vector<GemmPlotSize> sizes;
+    std::vector<GemmPlotSize> sizes;  // Problem sizes to benchmark
 };
 
 struct GemvPlotSize
@@ -65,7 +65,15 @@ struct GemvPlotInput
     std::string name;
     std::string title;
     std::string x_axis;
-    std::vector<GemvPlotSize> sizes;
+    std::vector<GemvPlotSize> sizes;  // Problem sizes to benchmark
+};
+
+struct AttnFwdPlotInput
+{
+    std::string name;
+    std::string title;
+    std::string x_axis;
+    std::vector<AttnFwdSize> sizes;  // Problem sizes to benchmark
 };
 
 template <typename Ctype, typename ABtype, typename PlotInput>
@@ -79,6 +87,26 @@ void fix_plot_names(std::vector<PlotInput>& plots, CudaArch arch)
     title_suffix += arch_name(arch);
     name_suffix += "_" + C_name + "_" + AB_name;
     title_suffix += "." + C_name + "." + AB_name + "." + AB_name + ")";
+    for (PlotInput& plot : plots) {
+        plot.name += name_suffix;
+        plot.title += title_suffix;
+    }
+}
+
+template <typename T_type, typename L_type, int Hdim, bool Causal, typename PlotInput>
+void fix_plot_names(std::vector<PlotInput>& plots, CudaArch arch, AttnFwdCaseT<T_type, L_type, Hdim, Causal>)
+{
+    std::string T_name = case_type_name(T_type{});
+    // Ignore L-type for now
+    std::string name_suffix = "_";
+    std::string title_suffix = " (";
+    name_suffix += arch_name(arch);
+    title_suffix += arch_name(arch);
+    name_suffix += "_" + T_name;
+    if (Causal) {
+        name_suffix += "_causal";
+    }
+    title_suffix += "." + T_name + ", " + (Causal ? "causal" : "non-causal") + ")";
     for (PlotInput& plot : plots) {
         plot.name += name_suffix;
         plot.title += title_suffix;
@@ -153,6 +181,30 @@ std::vector<GemvPlotInput> generate_gemv_plot_inputs(CudaArch arch)
 
     std::vector<GemvPlotInput> plots = {plot_input};
     fix_plot_names<float, float>(plots, arch);
+    return plots;
+}
+
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+std::vector<AttnFwdPlotInput> generate_attn_fwd_plot_inputs(
+        CudaArch arch,
+        AttnFwdCaseT<T_type, L_type, Hdim, Causal> dummy_case)
+{
+    AttnFwdPlotInput plot_input{};
+    plot_input.name = "attn_fwd";
+    plot_input.title = "Attention Fwd.";
+    plot_input.x_axis = "SeqLen";
+    const int seq_max = arch != CudaArch::Sm80 ? 8192 : 16384;
+    for (int seq = 2048; seq <= seq_max; seq *= 2) {
+        AttnFwdSize size;
+        size.Batch = 1;
+        size.KV_Heads = 64;
+        size.Groups = 1;
+        size.Hdim = Hdim;
+        size.SeqLen = seq;
+        plot_input.sizes.push_back(size);
+    }
+    std::vector<AttnFwdPlotInput> plots{plot_input};
+    fix_plot_names(plots, arch, dummy_case);
     return plots;
 }
 
@@ -575,6 +627,110 @@ void generate_gemv_plot_samples(const MainData& main_data, const GemvPlotInput& 
     }
 }
 
+template <typename T_type, typename L_type, int Hdim, bool Causal>
+void generate_attn_fwd_plot_samples(
+    const MainData& main_data,
+    const AttnFwdPlotInput& plot_input,
+    const AttnFwdCaseT<T_type, L_type, Hdim, Causal>& dummy_case)
+{
+    using KernelCase = AttnFwdCaseT<T_type, L_type, Hdim, Causal>;
+    bool need_comma = false;
+    std::vector<int> case_permutations;
+    std::vector<KernelCaseEntry<KernelCase>> attn_case_entries = generate_cases<KernelCase>(
+            &case_permutations, main_data.cuda_cc_major, main_data.cuda_cc_minor);
+
+
+    for (AttnFwdSize plot_size : plot_input.sizes) {
+        const int Batch = plot_size.Batch;
+        const int KV_Heads = plot_size.KV_Heads;
+        const int Groups = plot_size.Groups;
+        const int SeqLen = plot_size.SeqLen;
+
+        warn_if_no_json();
+        fprintf(main_data.json_file, "    %c{\"Batch\": %i, \"KV_Heads\": %i, \"Groups\": %i, \"Hdim\": %i, \"SeqLen\": %i, \"kernels\": [\n",
+                need_comma ? ',' : ' ', Batch, KV_Heads, Groups, Hdim, SeqLen);
+        need_comma = true;
+
+        AsyncDeleter deleter{main_data.stream};
+
+        printf("\n\x1b[34m\x1b[1mattn_fwd:\x1b[0m\n");
+        printf("Batch=%i, KV_Heads=%i, Groups=%i, Hdim=%i, SeqLen=%i\n", Batch, KV_Heads, Groups, Hdim, SeqLen);
+        std::unique_ptr<char[], AsyncDeleter> unique_L2_shred_memory;
+        std::unique_ptr<T_type[], AsyncDeleter> unique_O_test;
+        std::unique_ptr<T_type[], AsyncDeleter> unique_O_expected;
+        std::unique_ptr<L_type[], AsyncDeleter> unique_l_vec_test;
+        std::unique_ptr<L_type[], AsyncDeleter> unique_l_vec_expected;
+        std::unique_ptr<T_type[], AsyncDeleter> unique_Q;
+        std::unique_ptr<T_type[], AsyncDeleter> unique_K;
+        std::unique_ptr<T_type[], AsyncDeleter> unique_V;
+
+        init_alloc(unique_L2_shred_memory, 1, 1, L2_shred_bytes, deleter);
+        const auto QO_Heads = KV_Heads * Groups;
+        init_alloc(unique_O_test, Batch * QO_Heads, SeqLen, Hdim, deleter);
+        init_alloc(unique_O_expected, Batch * QO_Heads, SeqLen, Hdim, deleter);
+        init_alloc(unique_l_vec_test, Batch * QO_Heads, SeqLen, 1, deleter);
+        init_alloc(unique_l_vec_expected, Batch * QO_Heads, SeqLen, 1, deleter);
+        init_alloc(unique_Q, Batch * QO_Heads, SeqLen, Hdim, deleter);
+        init_alloc(unique_K, Batch * KV_Heads, SeqLen, Hdim, deleter);
+        init_alloc(unique_V, Batch * KV_Heads, SeqLen, Hdim, deleter);
+
+        AttnFwdTestResourcesT<T_type, L_type, Hdim, Causal> resources;
+        resources.start_event = main_data.start_event;
+        resources.end_event = main_data.end_event;
+        resources.d_O_test = unique_O_test.get();
+        resources.d_O_expected = unique_O_expected.get();
+        resources.d_l_vec_test = unique_l_vec_test.get();
+        resources.d_l_vec_expected = unique_l_vec_expected.get();
+        resources.d_Q = unique_Q.get();
+        resources.d_K = unique_K.get();
+        resources.d_V = unique_V.get();
+        resources.L2_shred_bytes = L2_shred_bytes;
+        resources.L2_shred_memory = unique_L2_shred_memory.get();
+
+        for (int trial_i = 0; trial_i < num_warmup + num_timed; ++trial_i) {
+            TestDataConfig data_config = get_data_config(trial_i, 999999, T_type{});
+            AttnFwdSize size;
+            size.Batch = Batch;
+            size.KV_Heads = KV_Heads;
+            size.Groups = Groups;
+            size.Hdim = Hdim;
+            size.SeqLen = SeqLen;
+
+            // Initialize test data on every warmup iteration, and the first timed iteration.
+            // Additional test data generation is not needed as timed iterations always use the same data.
+            if (trial_i < num_warmup + 1) {
+                init_test_data(resources, size, data_config.A_code, data_config.B_code, data_config.A_code);
+            }
+
+            // Test kernels in a random order.
+            shuffle_ints(case_permutations, trial_i + 27182818, SeqLen);
+            for (auto entry_index : case_permutations) {
+                KernelCaseEntry<KernelCase>& entry = attn_case_entries.at(entry_index);
+                const KernelCase& attn_case = *entry.p_case;
+                if (attn_case.supports(size)) {
+                    TestResult result = run_attn_fwd_case(attn_case, resources, size, data_config.check_mode);
+                    global_all_passed &= result.passed;
+                    if (trial_i >= num_warmup) {
+                        entry.flops_samples.push_back(result.flops);
+                    }
+                }
+            };
+            fprintf(stderr, ".");
+        }
+        fprintf(stderr, "\n");
+
+        for (KernelCaseEntry<KernelCase>& entry: attn_case_entries) {
+            summarize_entry(main_data, entry, &entry == &attn_case_entries[0]);
+
+            // Clear flops samples vector for the next problem size.
+            entry.flops_samples.clear();
+        }
+
+        fprintf(main_data.json_file, "    ]}\n");
+    }
+}
+
+
 int Main(int argc, char** argv)
 {
     MainData main_data{};
@@ -677,6 +833,33 @@ int Main(int argc, char** argv)
         fprintf(stderr, "No user GemvCase instances, skipping...\n");
     }
 
+    auto typed_attn_fwd_helper = [&] (auto kernel_case) {
+        if (!get_user_cases(kernel_case).empty()) {
+            for (const AttnFwdPlotInput& plot_input : generate_attn_fwd_plot_inputs(arch, kernel_case)) {
+                begin_json_plot_object(plot_input);
+                generate_attn_fwd_plot_samples(main_data, plot_input, kernel_case);
+                end_json_plot_object();
+            }
+        }
+        else {
+            fprintf(
+                stderr,
+                "No user AttnFwdCase_%s_%s_%i%s instances, skipping...\n",
+                kernel_case.t_type_name(),
+                kernel_case.l_type_name(),
+                kernel_case.Hdim,
+                kernel_case.Causal ? "_causal" : ""
+            );
+        }
+    };
+
+    static_assert(std::variant_size_v<AttnFwdCaseUnion> == 4);
+    typed_attn_fwd_helper(AttnFwdCase_bf16_f32_64{});
+    typed_attn_fwd_helper(AttnFwdCase_bf16_f32_128{});
+    typed_attn_fwd_helper(AttnFwdCase_bf16_f32_64_causal{});
+    typed_attn_fwd_helper(AttnFwdCase_bf16_f32_128_causal{});
+
+    // Epilogue
     fprintf(main_data.json_file, "]\n");
 
     if (global_all_passed) {

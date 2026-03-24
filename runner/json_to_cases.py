@@ -38,6 +38,11 @@ gemv_supported_ABC_types = {
     ("f32", "f32", "f32"),
 }
 
+attn_fwd_supported_TL_Hdim = {
+    ("bf16", "f32", 64),
+    ("bf16", "f32", 128),
+}
+
 ctype_table = {
     "f16": "__half",
     "f32": "float",
@@ -79,6 +84,15 @@ def get_ABC_types(j_obj, supported_ABC_types):
             f"A: {types[0]}, B: {types[1]}, C: {types[2]}"
         )
 
+def get_TL_Hdim(j_obj, supported_TL_Hdim):
+    tup = (j_obj["T_type"], j_obj["L_type"], get_positive_int(j_obj, "Hdim", None))
+    if tup in supported_TL_Hdim:
+        return tup
+    else:
+        raise ValueError(
+            f"Unsupported: T (tensor): {tup[0]}, L (l_vec): {tup[1]}, Hdim: {tup[2]}"
+        )
+
 
 @dataclass(slots=True)
 class GemmCase:
@@ -117,9 +131,29 @@ class GemvCase:
     C_type: str
 
 
+@dataclass(slots=True)
+class AttnFwdCase:
+    cuda_arch: str
+    json_name: str
+    proc_name: str
+    run_function: str
+    Batch_divisor: int
+    Batch_max: int
+    KV_Heads_divisor: int
+    KV_Heads_max: int
+    Groups_divisor: int
+    Groups_max: int
+    SeqLen_divisor: int
+    SeqLen_max: int
+    T_type: str
+    L_type: str
+    Hdim: int
+
+
 c_lines = []
 user_gemm_cases = []
 user_gemv_cases = []
+user_attn_fwd_cases = []
 proc_name_to_json = {}
 
 
@@ -287,6 +321,71 @@ def add_gemv_case(fname, cuda_arch, j_obj):
     # Store gemv test case, to be added to the C++ array later.
     user_gemv_cases.append(case_obj)
 
+attn_fwd_keys = {
+    "proc", "args", "algorithm",
+    "Batch_divisor", "Batch_max",
+    "KV_Heads_divisor", "KV_Heads_max",
+    "Groups_divisor", "Groups_max",
+    "Hdim",
+    "SeqLen_divisor", "SeqLen_max",
+    "T_type", "L_type",
+}
+
+def add_attn_fwd_case(fname, cuda_arch, j_obj):
+    proc = j_obj["proc"]
+    args = j_obj["args"]
+    allowed_keys = attn_fwd_keys
+
+    for key in j_obj:
+        if key not in allowed_keys:
+            raise ValueError(f"Unknown key {key!r}, not in {allowed_keys!r}")
+
+    T_type, L_type, Hdim = get_TL_Hdim(j_obj, attn_fwd_supported_TL_Hdim)
+
+    causal = j_obj["causal"]
+    if not isinstance(causal, bool):
+        raise ValueError(f"causal={causal}: must be a bool")
+
+    case_obj = AttnFwdCase(
+        cuda_arch,
+        fname,
+        proc,
+        "run_" + proc,
+        Batch_divisor=get_positive_int(j_obj, "Batch_divisor", 1),
+        Batch_max=get_positive_int(j_obj, "Batch_max", int32_max if "Batch" in args else 1),
+        KV_Heads_divisor=get_positive_int(j_obj, "KV_Heads_divisor", 1),
+        KV_Heads_max=get_positive_int(j_obj, "KV_Heads_max", int32_max),
+        Groups_divisor=get_positive_int(j_obj, "Groups_divisor", 1),
+        Groups_max=get_positive_int(j_obj, "Groups_max", int32_max if "Groups" in args else 1),
+        SeqLen_divisor=get_positive_int(j_obj, "SeqLen_divisor", 16),
+        SeqLen_max=get_positive_int(j_obj, "SeqLen_max", int32_max),
+        Hdim=Hdim,
+        T_type=T_type,
+        L_type=L_type,
+        causal=causal,
+    )
+
+    # Generate run function
+    CT = ctype_table[case_obj.T_type]
+    CL = ctype_table[case_obj.L_type]
+    c_args = ["ctxt"]
+    for arg_name in args:
+        if arg_name in ("Batch", "KV_Heads", "Groups", "SeqLen"):
+            c_args.append(f"size.{arg_name}")
+        elif arg_name in ("l_vec", "O", "Q", "K", "V"):
+            c_args.append(arg_name)
+        else:
+            raise ValueError(f"Unknown arg name {arg_name!r}")
+
+    c_lines.append(f"static void run_{proc}(AttnFwdSize size, {CT}* O, {CL}* l_vec, const {CT}* Q, const {CT}* K, const {CT}* V)")
+    c_lines.append("{")
+    c_lines.append("    void* ctxt = nullptr;")
+    c_lines.append(f"    {proc}({', '.join(c_args)});")
+    c_lines.append("}\n")
+
+    # Store attn_fwd test case, to be added to the C++ array later.
+    user_attn_fwd_cases.append(case_obj)
+
 
 for fname in json_fnames:
     try:
@@ -309,6 +408,8 @@ for fname in json_fnames:
                 add_gemm_case(fname, cuda_arch, j_obj)
             elif algorithm == "gemv":
                 add_gemv_case(fname, cuda_arch, j_obj)
+            elif algorithm == "attn_fwd":
+                add_attn_fwd_case(fname, cuda_arch, j_obj)
             else:
                 raise ValueError(f"Unknown algorithm {algorithm!r}")
             # Reset before next loop iteration to avoid misleading error message.
@@ -347,9 +448,11 @@ for abc_types in sorted(gemm_supported_ABC_types):
         c_lines.append(f"    {gemm_case.K_split_divisor}, {gemm_case.K_split_max},  // K_split")
         c_lines.append(f"    {gemm_case.K_cluster_divisor}, {gemm_case.K_cluster_max},  // K_cluster")
         c_lines.append("  },")
+        del gemm_case
     c_lines.append("  };\n")
     c_lines.append("  return result;\n")
     c_lines.append("}\n")
+
 
 
 # Generate user_gemv_cases array.
@@ -367,6 +470,7 @@ for gemv_case in user_gemv_cases:
     c_lines.append(f"    {gemv_case.M_divisor}, {gemv_case.M_max},")
     c_lines.append(f"    {gemv_case.K_divisor}, {gemv_case.K_max},")
     c_lines.append("  },")
+    del gemv_case
 if not user_gemv_cases:
     c_lines.append("  {}")
 c_lines.append("};\n")
@@ -375,6 +479,49 @@ c_lines.append("{")
 c_lines.append(f"  static const std::vector<GemvCase> result(&gemv_user_cases_array[0], &gemv_user_cases_array[{len(user_gemv_cases)}]);")
 c_lines.append("  return result;")
 c_lines.append("}")
+
+
+# Bucket AttnFwdCase by (T_type, L_type, Hdim, Causal).
+attn_fwd_case_buckets = {
+    types + (causal,): []
+    for types in attn_fwd_supported_TL_Hdim
+    for causal in (False, True)
+}
+for attn_fwd_case in user_attn_fwd_cases:
+    key = (attn_fwd_case.T_type, attn_fwd_case.L_type, attn_fwd_case.Hdim, attn_fwd_case.causal)
+    attn_fwd_case_buckets[key].append(attn_fwd_case)
+
+
+# Generate user_attn_fwd_cases arrays by type.
+# We previously already generated the wrapper run_* functions.
+for TL_Hdim_causal in sorted(attn_fwd_case_buckets):
+    T, L, Hdim, causal = TL_Hdim_causal
+    Ccase = f"AttnFwdCase_{T}_{L}_{Hdim}"
+    if causal:
+        Ccase += "_causal"
+    c_lines.append(f"const std::vector<{Ccase}>& get_user_cases(const {Ccase}&)")
+    c_lines.append("{")
+    c_lines.append(f"  static const std::vector<{Ccase}> result {{")
+    for attn_fwd_case in attn_fwd_case_buckets[TL_Hdim_causal]:
+        c_lines.append(f"  {Ccase} {{")
+        c_lines.append(f"    CudaArch::{attn_fwd_case.cuda_arch},")
+        c_lines.append(f"    {json.dumps(attn_fwd_case.json_name)},")
+        c_lines.append(f"    {json.dumps(attn_fwd_case.proc_name)},")
+        c_lines.append(f"    {attn_fwd_case.run_function},")
+        c_lines.append(f"    {attn_fwd_case.Batch_divisor},")
+        c_lines.append(f"    {attn_fwd_case.Batch_max},")
+        c_lines.append(f"    {attn_fwd_case.KV_Heads_divisor},")
+        c_lines.append(f"    {attn_fwd_case.KV_Heads_max},")
+        c_lines.append(f"    {attn_fwd_case.Groups_divisor},")
+        c_lines.append(f"    {attn_fwd_case.Groups_max},")
+        c_lines.append(f"    {attn_fwd_case.SeqLen_divisor},")
+        c_lines.append(f"    {attn_fwd_case.SeqLen_max},")
+        c_lines.append("  },")
+        del attn_fwd_case
+    c_lines.append("  };\n")
+    c_lines.append("  return result;")
+    c_lines.append("}\n")
+
 
 c_lines.append("\n}  // end namespace")
 

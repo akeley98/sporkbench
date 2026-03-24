@@ -126,7 +126,7 @@ rule nvcc_Sm80
   depfile = $out.d
 
 rule nvcc_Sm90a
-  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a $in -o $out -MD -MF $out.d
+  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a -DKITTENS_HOPPER=1 $in -o $out -MD -MF $out.d
   depfile = $out.d
 
 rule link
@@ -166,7 +166,24 @@ for i, src_info in enumerate(exocc_sources):
 # Write CUDA -> .o builds for the runner itself.
 build.write("\n")
 for src_info in runner_sources:
-    build.write(f"build {Qpath(src_info.o)}: nvcc_Sm80 {Qpath(src_info.cu)}\n")
+    # HYPOCRISY: we have much less strict rules for including the architecture
+    # in the runner file than for the user's exocc files.
+    bin_stem, fname = os.path.split(src_info.cu)
+    if fname.endswith(".cu"):
+        is_Sm80 = (
+            fname == "sporkbench_builtin_cases.cu" or
+            fname == "sporkbench_test.cu" or
+            "_Sm80" in fname
+        )
+        is_Sm90a = "_Sm90a" in fname
+    else:
+        is_Sm80 = True
+    assert is_Sm80 + is_Sm90a == 1, f"{fname} must contain exactly one of _Sm80 or _Sm90a"
+    if is_Sm80:
+        arch = "Sm80"
+    if is_Sm90a:
+        arch = "Sm90a"
+    build.write(f"build {Qpath(src_info.o)}: nvcc_{arch} {Qpath(src_info.cu)}\n")
 
 
 # Write JSON-to-C build
