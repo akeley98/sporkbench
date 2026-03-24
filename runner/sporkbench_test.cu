@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include <stdint.h>
 #include <stdio.h>
+#include <type_traits>
 #include <vector>
 
 #include "sporkbench_cublas_gemm.hpp"
@@ -53,11 +54,11 @@ __global__ void device_init_test_data(
                         value = T(int(pcg3d(k, mn, z + 20010106) % 3) - 1);
                     }
                     break;
-                  case TestDataCode::random:
-                  default:
+                  case TestDataCode::random_no_outliers:
+                  case TestDataCode::random_with_outliers:
                     {
                         const auto randbits = pcg3d(k, mn, z + 20010106);
-                        if (randbits % 100'000u == 0) {
+                        if (code == TestDataCode::random_with_outliers && randbits % 100'000u == 0) {
                             // 1 in 100'000 chance of a "big" value.
                             // This greatly reduces the chance that a genuine bug is mistaken for fp error.
                             value = sizeof(T) >= 4 ? T(1000) : T(24);
@@ -100,6 +101,80 @@ __global__ void device_compare_tensor_test_init_bitfield(unsigned long long* d_b
     *d_bitfield = UINT64_MAX;
 }
 
+struct TestTensorSize
+{
+    int batches;
+    int heads;
+    int rows;
+    int cols;
+
+    __host__ __device__ size_t row_major_index(int batch, int head, int row, int col) const
+    {
+        return ((size_t(batch) * heads + head) * rows + row) * cols + col;
+    }
+
+    __host__ __device__ size_t col_major_index(int batch, int head, int row, int col) const
+    {
+        return ((size_t(batch) * heads + head) * cols + col) * rows + row;
+    }
+
+    __host__ __device__ void unpack_row_major(size_t linear_index, int* batch, int* head, int* row, int* col) const
+    {
+        *col = int(linear_index % size_t(cols));
+        linear_index /= size_t(cols);
+        *row = int(linear_index % size_t(rows));
+        linear_index /= size_t(rows);
+        *head = int(linear_index % size_t(heads));
+        linear_index /= size_t(heads);
+        *batch = int(linear_index);
+    }
+
+    __host__ __device__ void unpack_col_major(size_t linear_index, int* batch, int* head, int* row, int* col) const
+    {
+        *row = int(linear_index % size_t(rows));
+        linear_index /= size_t(rows);
+        *col = int(linear_index % size_t(cols));
+        linear_index /= size_t(cols);
+        *head = int(linear_index % size_t(heads));
+        linear_index /= size_t(heads);
+        *batch = int(linear_index);
+    }
+};
+
+TestTensorSize to_test_tensor_size(GemmSize size)
+{
+    return TestTensorSize{size.L, 1, size.M, size.N};
+}
+
+TestTensorSize to_test_tensor_size(GemvSize size)
+{
+    return TestTensorSize{1, 1, 1, size.M};
+}
+
+TestTensorSize to_test_tensor_size(AttnFwdSize size)
+{
+    const int qo_heads = size.KV_Heads * size.Groups;
+    return TestTensorSize{size.Batch, qo_heads, size.SeqLen, size.Hdim};
+}
+
+void print_problem_size(GemmSize size)
+{
+    printf("L=%i, MNK=[%i, %i, %i], K_split=%i", size.L, size.M, size.N, size.K_cluster * size.K_split, size.K_split);
+}
+
+void print_problem_size(GemvSize size)
+{
+    printf("M=%i, K=%i", size.M, size.K);
+}
+
+void print_problem_size(AttnFwdSize size)
+{
+    printf(
+        "Batch=%i, KV_Heads=%i, Groups=%i, SeqLen=%i, Hdim=%i\n",
+        size.Batch, size.KV_Heads, size.Groups, size.SeqLen, size.Hdim
+    );
+}
+
 // Requires that *d_bitfield is initialized to UINT64_MAX.
 // Compare the two equal-sized matrices and, if any comparison failures, put the coordinates of the wrong value
 // into *d_bitfield, packed as its linear_index into the d_expected array.
@@ -107,21 +182,24 @@ __global__ void device_compare_tensor_test_init_bitfield(unsigned long long* d_b
 //
 // NOTE: d_expected used to be hard-wired as column major. If any comments describe this, they are outdated.
 template <typename Test, typename Expected>
-__global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, const Expected* d_expected,
+__global__ void device_compare_tensor_test(TestTensorSize size, const Test* d_test, const Expected* d_expected,
                                            bool row_major, bool exact, unsigned long long* d_bitfield)
 {
     uint32_t tid_x = threadIdx.x + blockIdx.x * blockDim.x;
     uint32_t tid_y = threadIdx.y + blockIdx.y * blockDim.y;
     uint32_t tid_z = threadIdx.z + blockIdx.z * blockDim.z;
-    for (uint32_t batch = tid_z; batch < size.L; batch += blockDim.z * gridDim.z) {
-        for (uint32_t m = tid_y; m < size.M; m += blockDim.y * gridDim.y) {
-            for (uint32_t n = tid_x; n < size.N; n += blockDim.x * gridDim.x) {
+    const uint32_t batches_heads = uint32_t(size.batches) * uint32_t(size.heads);
+    for (uint32_t b_h = tid_z; b_h < batches_heads; b_h += blockDim.z * gridDim.z) {
+        uint32_t batch = b_h / uint32_t(size.heads);
+        uint32_t head = b_h % uint32_t(size.heads);
+        for (uint32_t m = tid_y; m < uint32_t(size.rows); m += blockDim.y * gridDim.y) {
+            for (uint32_t n = tid_x; n < uint32_t(size.cols); n += blockDim.x * gridDim.x) {
                 size_t linear_index;
                 if (row_major) {
-                    linear_index = size.C_row_major_index(batch, m, n);
+                    linear_index = size.row_major_index(batch, head, m, n);
                 }
                 else {
-                    linear_index = size.C_col_major_index(batch, m, n);
+                    linear_index = size.col_major_index(batch, head, m, n);
                 }
                 bool correct;
                 if (exact) {
@@ -149,13 +227,13 @@ __global__ void device_compare_tensor_test(GemmSize size, const Test* d_test, co
 }
 
 template <typename Test, typename Expected>
-__device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, const Expected* d_expected,
-                                          bool row_major, uint32_t batch, uint32_t m, uint32_t n)
+__device__ void print_tensor_neighborhood(TestTensorSize size, const Test* d_test, const Expected* d_expected,
+                                          bool row_major, uint32_t batch, uint32_t head, uint32_t m, uint32_t n)
 {
     uint32_t m_min = m < 2 ? 0u : m - 2;
-    uint32_t m_max = m + 2 >= size.M ? size.M - 1u : m + 2;
+    uint32_t m_max = m + 2 >= size.rows ? size.rows - 1u : m + 2;
     uint32_t n_min = n < 2 ? 0u : n - 2;
-    uint32_t n_max = n + 2 >= size.N ? size.N - 1u : n + 2;
+    uint32_t n_max = n + 2 >= size.cols ? size.cols - 1u : n + 2;
 
     for (uint32_t cm = m_min; cm <= m_max; cm++) {
         for (uint32_t cn = n_min; cn <= n_max; cn++) {
@@ -164,10 +242,10 @@ __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, con
             }
             size_t linear_index;
             if (row_major) {
-                linear_index = size.C_row_major_index(batch, cm, cn);
+                linear_index = size.row_major_index(batch, head, cm, cn);
             }
             else {
-                linear_index = size.C_col_major_index(batch, cm, cn);
+                linear_index = size.col_major_index(batch, head, cm, cn);
             }
             const double f_test = static_cast<double>(d_test[linear_index]);
             const double f_expected = static_cast<double>(d_expected[linear_index]);
@@ -184,35 +262,47 @@ __device__ void print_tensor_neighborhood(GemmSize size, const Test* d_test, con
 
 // Print info on wrong value from function above.
 template <typename Test, typename Expected>
-__global__ void device_compare_tensor_test_print(GemmSize size, const Test* d_test, const Expected* d_expected,
+__global__ void device_compare_tensor_test_print(TestTensorSize size, const Test* d_test, const Expected* d_expected,
                                                  bool row_major, unsigned long long* d_bitfield)
 {
     unsigned long long linear_index = *d_bitfield;
     if (linear_index != UINT64_MAX) {
-        uint32_t batch, m, n;
-        batch = linear_index / (size.M * size.N);
+        int batch, head, row, col;
         if (row_major) {
-            m = (linear_index / size.N) % size.M;
-            n = linear_index % size.N;
+            size.unpack_row_major(*d_bitfield, &batch, &head, &row, &col);
         }
         else {
-            n = (linear_index / size.M) % size.N;
-            m = linear_index % size.M;
+            size.unpack_col_major(*d_bitfield, &batch, &head, &row, &col);
         }
         const double f_test = static_cast<double>(d_test[linear_index]);
         const double f_expected = static_cast<double>(d_expected[linear_index]);
-        printf("\x1b[1m[batch=%u, m=%u, n=%u]\x1b[0m %g != %g (test != expected)\n", batch, m, n, f_test, f_expected);
+        if (size.heads == 1) {
+            printf(
+                "\x1b[1m[batch=%i, m=%i, n=%i]\x1b[0m %g != %g (test != expected)\n",
+                batch, row, col, f_test, f_expected);
+        }
+        else {
+            printf(
+                "\x1b[1m[batch=%i, head=%i, row=%i, col=%i]\x1b[0m %g != %g (test != expected)\n",
+                batch, head, row, col, f_test, f_expected);
+        }
 
-        print_tensor_neighborhood(size, d_test, d_expected, row_major, batch, m, n);
+        print_tensor_neighborhood(size, d_test, d_expected, row_major, batch, head, row, col);
     }
 }
 
-template <typename Test, typename Expected>
+template <typename ProblemSize, typename Test, typename Expected>
 bool launch_device_compare_tensor(
-        GemmSize size, const char* proc_name, const Test* d_test, const Expected* d_expected, bool test_row_major,
-        bool exact, cudaStream_t stream)
+        ProblemSize problem_size, const char* proc_name, const Test* d_test, const Expected* d_expected,
+        bool row_major, bool exact, cudaStream_t stream)
 {
-    dim3 grid(unsigned(size.N + 63u) / 64u, unsigned(size.M + 3u) / 4u, unsigned(size.L));
+    const auto test_size = to_test_tensor_size(problem_size);
+    static_assert(std::is_same_v<decltype(test_size), const TestTensorSize>);
+    dim3 grid(
+        unsigned(test_size.cols + 63u) / 64u,
+        unsigned(test_size.rows + 3u) / 4u,
+        unsigned(test_size.batches * test_size.heads)
+    );
     dim3 block(64, 4, 1);
     unsigned long long* d_bitfield = 0;
     cudaMallocAsync(&d_bitfield, sizeof(*d_bitfield), stream);
@@ -221,14 +311,15 @@ bool launch_device_compare_tensor(
         return false;
     }
     device_compare_tensor_test_init_bitfield<<<1, 1, 0, stream>>>(d_bitfield);
-    device_compare_tensor_test<<<grid, block, 0, stream>>>(size, d_test, d_expected, test_row_major, exact, d_bitfield);
+    device_compare_tensor_test<<<grid, block, 0, stream>>>(test_size, d_test, d_expected, row_major, exact, d_bitfield);
     unsigned long long h_bitfield;
     cudaMemcpy(&h_bitfield, d_bitfield, sizeof(h_bitfield), cudaMemcpyDeviceToHost);
     if (h_bitfield != UINT64_MAX) {
-        printf("\x1b[31m\x1b[1mFAILED:\x1b[0m %s, L=%i, MNK=[%i, %i, %i], K_split=%i\n",
-            proc_name, size.L, size.M, size.N, size.K_cluster * size.K_split, size.K_split);
+        printf("\x1b[31m\x1b[1mFAILED:\x1b[0m %s ", proc_name);
+        print_problem_size(problem_size);
+        printf("\n");
         fflush(stdout);
-        device_compare_tensor_test_print<<<1, 1, 0, stream>>>(size, d_test, d_expected, test_row_major, d_bitfield);
+        device_compare_tensor_test_print<<<1, 1, 0, stream>>>(test_size, d_test, d_expected, row_major, d_bitfield);
         cudaStreamSynchronize(stream);  // flush stdout.
     }
     cudaFreeAsync(d_bitfield, stream);
@@ -306,8 +397,8 @@ double run_attn_fwd_case_impl(
     cudaEventElapsedTime(&ms, resources.start_event, resources.end_event);
 
     // Only counted tensor flops
-    const auto qk_macs = size.SeqLen * size.SeqLen * Hdim;
-    const auto so_macs = size.SeqLen * size.SeqLen * Hdim;
+    const auto qk_macs = double(size.SeqLen) * size.SeqLen * Hdim;
+    const auto so_macs = double(size.SeqLen) * size.SeqLen * Hdim;
     const double flops = double(size.Batch * size.KV_Heads * size.Groups) * (qk_macs + so_macs) * 2000.0 / ms;
     return flops;
 }
@@ -437,15 +528,9 @@ TestResult run_gemv_case(
 
     bool passed = true;
     if (check_mode != TestCheckMode::none) {
-        GemmSize gemm_size{};
-        gemm_size.L = 1;
-        gemm_size.M = size.M;
-        gemm_size.N = 1;
-        gemm_size.K_split = 1;
-        gemm_size.K_cluster = size.K;
         const bool exact = (check_mode == TestCheckMode::exact);
         passed = launch_device_compare_tensor(
-                gemm_size, gemv_case.proc_name, resources.y_test, resources.y_expected, true, exact, stream);
+                size, gemv_case.proc_name, resources.y_test, resources.y_expected, true, exact, stream);
     }
 
     cudaStreamSynchronize(stream);
@@ -510,7 +595,10 @@ TestResult attn_fwd_case_visitor_impl(
 
     bool passed = true;
     if (check_mode != TestCheckMode::none) {
-        fprintf(stderr, "TODO check attention correctness\n");
+        const bool exact = (check_mode == TestCheckMode::exact);
+        passed = launch_device_compare_tensor(
+                size, attn_case.proc_name, resources.d_O_test, resources.d_O_expected, true, exact, stream);
+        // TODO l_vec
     }
 
     cudaStreamSynchronize(stream);

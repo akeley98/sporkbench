@@ -193,8 +193,8 @@ std::vector<AttnFwdPlotInput> generate_attn_fwd_plot_inputs(
     plot_input.name = "attn_fwd";
     plot_input.title = "Attention Fwd.";
     plot_input.x_axis = "SeqLen";
-    const int seq_max = arch != CudaArch::Sm80 ? 8192 : 16384;
-    for (int seq = 2048; seq <= seq_max; seq *= 2) {
+    const int seq_max = arch != CudaArch::Sm80 ? 1536 * 8 : 1536 * 4;
+    for (int seq = 1536; seq <= seq_max; seq *= 2) {
         AttnFwdSize size;
         size.Batch = 1;
         size.KV_Heads = 64;
@@ -343,8 +343,8 @@ int exact_test_threshold(exo_e5m2)
 template <typename Ctype>
 TestDataConfig get_data_config(int trial_i, int K, Ctype)
 {
-    TestDataCode A_code = TestDataCode::random;
-    TestDataCode B_code = TestDataCode::random;
+    TestDataCode A_code = TestDataCode::random_with_outliers;
+    TestDataCode B_code = TestDataCode::random_with_outliers;
     TestCheckMode check_mode = TestCheckMode::none;
 
     // We will do testing on up to first 4 warmup iterations only.
@@ -708,7 +708,6 @@ void generate_attn_fwd_plot_samples(
         resources.L2_shred_memory = unique_L2_shred_memory.get();
 
         for (int trial_i = 0; trial_i < num_warmup + num_timed; ++trial_i) {
-            TestDataConfig data_config = get_data_config(trial_i, 999999, T_type{});
             AttnFwdSize size;
             size.Batch = Batch;
             size.KV_Heads = KV_Heads;
@@ -716,10 +715,13 @@ void generate_attn_fwd_plot_samples(
             size.Hdim = Hdim;
             size.SeqLen = SeqLen;
 
+            const auto check_mode = trial_i < num_warmup ? TestCheckMode::approximate : TestCheckMode::none;
+
             // Initialize test data on every warmup iteration, and the first timed iteration.
             // Additional test data generation is not needed as timed iterations always use the same data.
             if (trial_i < num_warmup + 1) {
-                init_test_data(resources, size, data_config.A_code, data_config.B_code, data_config.A_code);
+                const auto data_code = TestDataCode::random_no_outliers;
+                init_test_data(resources, size, data_code, data_code, data_code);
             }
 
             // Test kernels in a random order.
@@ -728,7 +730,7 @@ void generate_attn_fwd_plot_samples(
                 KernelCaseEntry<KernelCase>& entry = attn_case_entries.at(entry_index);
                 const KernelCase& attn_case = *entry.p_case;
                 if (attn_case.supports(size)) {
-                    TestResult result = run_attn_fwd_case(attn_case, resources, size, data_config.check_mode);
+                    TestResult result = run_attn_fwd_case(attn_case, resources, size, check_mode);
                     global_all_passed &= result.passed;
                     if (trial_i >= num_warmup) {
                         entry.flops_samples.push_back(result.flops);

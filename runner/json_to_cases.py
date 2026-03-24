@@ -148,6 +148,7 @@ class AttnFwdCase:
     T_type: str
     L_type: str
     Hdim: int
+    causal: bool
 
 
 c_lines = []
@@ -326,9 +327,9 @@ attn_fwd_keys = {
     "Batch_divisor", "Batch_max",
     "KV_Heads_divisor", "KV_Heads_max",
     "Groups_divisor", "Groups_max",
-    "Hdim",
     "SeqLen_divisor", "SeqLen_max",
     "T_type", "L_type",
+    "Hdim", "causal",
 }
 
 def add_attn_fwd_case(fname, cuda_arch, j_obj):

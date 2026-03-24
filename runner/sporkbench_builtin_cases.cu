@@ -153,7 +153,7 @@ make_builtin_cases_attn_fwd()
     kittens_case.KV_Heads_max = INT32_MAX;
     kittens_case.Groups_divisor = 1;
     kittens_case.Groups_max = INT32_MAX;
-    kittens_case.SeqLen_divisor = 16;
+    kittens_case.SeqLen_divisor = 192;  // !!!
     kittens_case.SeqLen_max = INT32_MAX;
     std::vector<AttnFwdCaseT<T_type, L_type, Hdim, Causal>> cases{kittens_case};
     return cases;

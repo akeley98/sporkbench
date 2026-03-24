@@ -22,10 +22,11 @@ enum class TestCheckMode
 
 enum class TestDataCode
 {
-    random = 0,
-    batch_index_identity = 1,
-    tiled_numbers = 2,
-    signs_only = 3,
+    random_no_outliers = 0,
+    random_with_outliers = 1,
+    batch_index_identity = 2,
+    tiled_numbers = 3,
+    signs_only = 4,
 };
 
 template <typename Ctype, typename ABtype>

@@ -16,7 +16,5 @@ gemm_m1n1 = make_Sm90a_gemm(config, 1, 1, cases)
 gemm_m1n2 = make_Sm90a_gemm(config, 1, 2, cases)
 gemm_m2n1 = make_Sm90a_gemm(config, 2, 1, cases)
 
-cases = []  # XXX
-
 import json
 json.dump(cases, open(__file__ + ".json", "w"))
