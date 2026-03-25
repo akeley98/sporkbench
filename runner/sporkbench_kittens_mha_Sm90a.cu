@@ -45,6 +45,7 @@ template<int D> struct fwd_globals {
     using l_gl = gl<float, -1, -1, -1, -1, l_col_vec>;
     using o_gl = gl<bf16,  -1, -1, -1, -1, o_tile>;
 
+    bool scale_lse;  // Added by David Zhao Akeley
     q_gl q;
     k_gl k;
     v_gl v;
@@ -223,8 +224,10 @@ void fwd_attend_ker(const __grid_constant__ fwd_globals<D> g) {
         warp::log(norm_vec, norm_vec);
         warp::add(norm_vec, norm_vec, max_vec_scaled);
 
-        if constexpr (D == 64) { warp::mul(norm_vec, norm_vec, -8.0f); }
-        else                   { warp::mul(norm_vec, norm_vec, -11.313708499f); }
+        // scale_lse test added by David Zhao Akeley.
+        if (!g.scale_lse) {}
+        else if constexpr (D == 64) { warp::mul(norm_vec, norm_vec, -8.0f); }
+        else                        { warp::mul(norm_vec, norm_vec, -11.313708499f); }
 
         warpgroup::store(l_smem[warpgroupid], norm_vec);
         warpgroup::sync(warpgroupid+4);
@@ -648,7 +651,7 @@ void bwd_attend_ker(const __grid_constant__ bwd_globals<D> g) {
 }
 
 void attention_forward(
-        int batch, int kv_heads, int Groups, int seq_len, int head_dim, bool is_causal,
+        int batch, int kv_heads, int Groups, int seq_len, int head_dim, bool is_causal, bool scale_lse,
         exo_bf16* o_ptr, float* l_ptr, exo_bf16* q_ptr, exo_bf16* k_ptr, exo_bf16* v_ptr,
         cudaStream_t stream)
 {
@@ -676,6 +679,7 @@ void attention_forward(
         o_global og_arg{d_o, static_cast<unsigned int>(batch), static_cast<unsigned int>(qo_heads), static_cast<unsigned int>(seq_len), 64U};
 
         globals g{
+            scale_lse,
             qg_arg,
             kg_arg,
             vg_arg,
@@ -715,6 +719,7 @@ void attention_forward(
         o_global og_arg{d_o, static_cast<unsigned int>(batch), static_cast<unsigned int>(qo_heads), static_cast<unsigned int>(seq_len), 128U};
 
         globals g{
+            scale_lse,
             qg_arg,
             kg_arg,
             vg_arg,

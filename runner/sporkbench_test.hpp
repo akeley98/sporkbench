@@ -78,9 +78,9 @@ struct AttnFwdTestResourcesT
     cudaEvent_t start_event;
     cudaEvent_t end_event;
     T_type* d_O_test;
-    L_type* d_l_vec_test;
+    L_type* d_lse_test;
     T_type* d_O_expected;
-    L_type* d_l_vec_expected;
+    L_type* d_lse_expected;
     T_type* d_Q;
     T_type* d_K;
     T_type* d_V;

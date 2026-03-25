@@ -98,7 +98,7 @@ struct AttnFwdSize
     // K[Batch, KV_Heads, SeqLen, Hdim]; `KV_Heads` is the total number of heads
     // V[Batch, KV_Heads, SeqLen, Hdim]; `KV_Heads` is the total number of heads
     // O[Batch, KV_Heads, Groups, SeqLen, Hdim]; `KV_Heads * Groups` is the total number of heads
-    // l_vec[Batch, KV_Heads, Groups, SeqLen]; `KV_Heads * Groups` is the total number of heads
+    // lse[Batch, KV_Heads, Groups, SeqLen]; `KV_Heads * Groups` is the total number of heads
     //
     // Rightmost stride is 1.
 };
@@ -109,7 +109,7 @@ using GemmRunT = void(*)(cublasHandle_t cublasH, GemmSize size, const ABtype* A,
 typedef void (*GemvRun)(cublasHandle_t cublasH, GemvSize size, const float* A, const float* x, float* y);
 
 template <typename T_type, typename L_type, int Hdim>
-using AttnFwdRunT = void(*)(AttnFwdSize size, T_type* O, L_type* l_vec, const T_type* Q, const T_type* K, const T_type* V);
+using AttnFwdRunT = void(*)(AttnFwdSize size, T_type* O, L_type* lse, const T_type* Q, const T_type* K, const T_type* V);
 
 constexpr int A_row_major_flag = 1;
 constexpr int B_row_major_flag = 2;

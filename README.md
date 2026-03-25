@@ -49,7 +49,7 @@ These JSON files must contain a list of objects (`dict`) of the format:
         "A_type": str  # "f16" or "f32", gemm only
         "B_type": str  # "f16" or "f32", gemm only
         "C_type": str  # "f16" or "f32", gemm only
-        "L_type": str  # l_vec type, attn only (TODO document)
+        "L_type": str  # lse type, attn only (TODO document)
         "T_type": str  # tensor type, attn only (TODO document)
         "Hdim": int  # Head dimension, attn only
         "causal": bool  # attn only
@@ -66,7 +66,7 @@ For `gemm`, the args mut be some permutation of `["M", "N", "K", "A", "B", "C"]`
   This indicates explicit support for split-K.
   `K_split` is the number of Exo tasks (Hopper clusters or pre-Hopper CTAs) cooperating on the K dimension.
 
-For `attn_fwd`, the args must be some permutation of `["Batch", "KV_Heads", "Groups", "SeqLen", "O", "l_vec", "Q", "K", "V"]`
+For `attn_fwd`, the args must be some permutation of `["Batch", "KV_Heads", "Groups", "SeqLen", "O", "lse", "Q", "K", "V"]`
 
 * The number of heads for `Q` (query) and `O` (output) is `KV_Heads * Groups`.
   Head `n` of the query/output is associated with head `floor(n / Groups)` of key/value.

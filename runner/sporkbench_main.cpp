@@ -678,8 +678,8 @@ void generate_attn_fwd_plot_samples(
         std::unique_ptr<char[], AsyncDeleter> unique_L2_shred_memory;
         std::unique_ptr<T_type[], AsyncDeleter> unique_O_test;
         std::unique_ptr<T_type[], AsyncDeleter> unique_O_expected;
-        std::unique_ptr<L_type[], AsyncDeleter> unique_l_vec_test;
-        std::unique_ptr<L_type[], AsyncDeleter> unique_l_vec_expected;
+        std::unique_ptr<L_type[], AsyncDeleter> unique_lse_test;
+        std::unique_ptr<L_type[], AsyncDeleter> unique_lse_expected;
         std::unique_ptr<T_type[], AsyncDeleter> unique_Q;
         std::unique_ptr<T_type[], AsyncDeleter> unique_K;
         std::unique_ptr<T_type[], AsyncDeleter> unique_V;
@@ -688,8 +688,8 @@ void generate_attn_fwd_plot_samples(
         const auto QO_Heads = KV_Heads * Groups;
         init_alloc(unique_O_test, Batch * QO_Heads, SeqLen, Hdim, deleter);
         init_alloc(unique_O_expected, Batch * QO_Heads, SeqLen, Hdim, deleter);
-        init_alloc(unique_l_vec_test, Batch * QO_Heads, SeqLen, 1, deleter);
-        init_alloc(unique_l_vec_expected, Batch * QO_Heads, SeqLen, 1, deleter);
+        init_alloc(unique_lse_test, Batch * QO_Heads, SeqLen, 1, deleter);
+        init_alloc(unique_lse_expected, Batch * QO_Heads, SeqLen, 1, deleter);
         init_alloc(unique_Q, Batch * QO_Heads, SeqLen, Hdim, deleter);
         init_alloc(unique_K, Batch * KV_Heads, SeqLen, Hdim, deleter);
         init_alloc(unique_V, Batch * KV_Heads, SeqLen, Hdim, deleter);
@@ -699,8 +699,8 @@ void generate_attn_fwd_plot_samples(
         resources.end_event = main_data.end_event;
         resources.d_O_test = unique_O_test.get();
         resources.d_O_expected = unique_O_expected.get();
-        resources.d_l_vec_test = unique_l_vec_test.get();
-        resources.d_l_vec_expected = unique_l_vec_expected.get();
+        resources.d_lse_test = unique_lse_test.get();
+        resources.d_lse_expected = unique_lse_expected.get();
         resources.d_Q = unique_Q.get();
         resources.d_K = unique_K.get();
         resources.d_V = unique_V.get();

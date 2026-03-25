@@ -143,7 +143,7 @@ struct TestTensorSize
     }
 };
 
-struct AttnStatsVectorSize
+struct LseVectorSize
 {
     int Batch, KV_Heads, Groups, SeqLen, Hdim;
 };
@@ -164,7 +164,7 @@ TestTensorSize to_test_tensor_size(AttnFwdSize size)
     return TestTensorSize{size.Batch, qo_heads, size.SeqLen, size.Hdim};
 }
 
-TestTensorSize to_test_tensor_size(AttnStatsVectorSize size)
+TestTensorSize to_test_tensor_size(LseVectorSize size)
 {
     const int qo_heads = size.KV_Heads * size.Groups;
     return TestTensorSize{size.Batch, qo_heads, size.SeqLen, 1};
@@ -188,7 +188,7 @@ void print_problem_size(AttnFwdSize size)
     );
 }
 
-void print_problem_size(AttnStatsVectorSize size)
+void print_problem_size(LseVectorSize size)
 {
     printf(
         "Batch=%i, KV_Heads=%i, Groups=%i, SeqLen=%i, Hdim=%i\n",
@@ -417,7 +417,7 @@ double run_attn_fwd_case_impl(
     cudaEventRecord(resources.start_event, stream);
     assert(stream == 0);  // Change run_function to take stream argument.
     attn_case.run_function(
-            size, resources.d_O_test, resources.d_l_vec_test,
+            size, resources.d_O_test, resources.d_lse_test,
             resources.d_Q, resources.d_K, resources.d_V);
     cudaEventRecord(resources.end_event, stream);
 
@@ -597,8 +597,8 @@ void init_test_data_impl(
 
     // TODO use cuDNN or something so we don't rely on H100.
     kittens_mha_h100::attention_forward(
-        size.Batch, size.KV_Heads, size.Groups, size.SeqLen, Hdim, Causal,
-        resources.d_O_expected, resources.d_l_vec_expected, resources.d_Q, resources.d_K, resources.d_V,
+        size.Batch, size.KV_Heads, size.Groups, size.SeqLen, Hdim, Causal, false,
+        resources.d_O_expected, resources.d_lse_expected, resources.d_Q, resources.d_K, resources.d_V,
         stream);
 }
 
@@ -627,8 +627,8 @@ TestResult attn_fwd_case_visitor_impl(
                 sizeof(resources.d_O_test[0]) * size.Batch * qo_heads * size.SeqLen * Hdim,
                 stream);
         cudaMemsetAsync(
-                resources.d_l_vec_test, 0xDD,
-                sizeof(resources.d_l_vec_test[0]) * size.Batch * qo_heads * size.SeqLen,
+                resources.d_lse_test, 0xDD,
+                sizeof(resources.d_lse_test[0]) * size.Batch * qo_heads * size.SeqLen,
                 stream);
     }
 
@@ -637,19 +637,19 @@ TestResult attn_fwd_case_visitor_impl(
     bool passed = true;
     if (check_mode != TestCheckMode::none) {
         const bool exact = (check_mode == TestCheckMode::exact);
-        AttnStatsVectorSize l_vec_size{};
-        l_vec_size.Batch = size.Batch;
-        l_vec_size.KV_Heads = size.KV_Heads;
-        l_vec_size.Groups = size.Groups;
-        l_vec_size.SeqLen = size.SeqLen;
-        l_vec_size.Hdim = size.Hdim;
+        LseVectorSize lse_size{};
+        lse_size.Batch = size.Batch;
+        lse_size.KV_Heads = size.KV_Heads;
+        lse_size.Groups = size.Groups;
+        lse_size.SeqLen = size.SeqLen;
+        lse_size.Hdim = size.Hdim;
         passed &= launch_device_compare_tensor(
                 size, attn_case.proc_name,
                 resources.d_O_test, resources.d_O_expected,
                 true, exact, stream);
         passed &= launch_device_compare_tensor(
-                l_vec_size, attn_case.proc_name,
-                resources.d_l_vec_test, resources.d_l_vec_expected,
+                lse_size, attn_case.proc_name,
+                resources.d_lse_test, resources.d_lse_expected,
                 true, exact, stream);
     }
 

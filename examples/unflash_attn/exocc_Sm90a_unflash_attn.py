@@ -33,12 +33,12 @@ def S_kernel(
     causal: bool,
     SeqLen: size,
     scale_factor: f32 @ CudaGridConstant,
-    l_vec: [L_type][SeqLen] @ CudaGmemLinear,
+    lse: [L_type][SeqLen] @ CudaGmemLinear,
     S: [T_type][SeqLen, SeqLen] @ CudaGmemLinear,
     QKt: [f32][SeqLen, SeqLen] @ CudaGmemLinear,
 ):
     assert SeqLen % 16 == 0
-    assert stride(l_vec, 0) == 1
+    assert stride(lse, 0) == 1
     assert stride(S, 1) == 1
     assert stride(QKt, 1) == 1
 
@@ -97,18 +97,14 @@ def S_kernel(
                     exp_tile[:, :],
                     dst=T_type, src=f32, size0=16, size1=16)
             # Write out log-sum-exp
-            # Do the weird scale by -1/scale_factor that ThunderKittens does (but it still doesn't match???)
             l_smem: L_type[16] @ CudaSmemLinear
             l_rmem: f32[16] @ CudaTkWarpTile(16, 16).col_vec
-            l_scale: f32 @ CudaRmemUniform(32)
-            l_scale = -1.0 / scale_factor
             cuda_tk_vec_log(l_rmem[:], se_accum[:], length=16, layout="ortho", dst=f32, src=f32)
             cuda_tk_vec_add_reduce(l_rmem[:], max_accum[:], length=16, layout="ortho", dst=f32, src=f32)
-            cuda_tk_vec_mul_lhs_scalar(l_rmem[:], l_scale, length=16, layout="ortho", dst=f32, src=f32)
             cuda_tk_store_vec_rs(l_smem[:], l_rmem[:], length=16, layout="ortho", dst=L_type, src=f32)
             Fence(cuda_in_order, cuda_in_order)
             for t in cuda_threads(0, 16):
-                l_vec[r * 16 + t] = l_smem[t]
+                lse[r * 16 + t] = l_smem[t]
             Fence(cuda_in_order, cuda_in_order)
 
 S_kernel = simplify(S_kernel)
@@ -121,7 +117,7 @@ smoke_test = False
 def smoke_test_overwrite(
         Batch: size, KV_Heads: size, Groups: size, SeqLen: size, Hdim: size,
         O: [T_type][Batch, KV_Heads, Groups, SeqLen, Hdim] @ CudaGmemLinear,
-        l_vec: [L_type][Batch, KV_Heads, Groups, SeqLen] @ CudaGmemLinear,
+        lse: [L_type][Batch, KV_Heads, Groups, SeqLen] @ CudaGmemLinear,
 ):
     if Batch > 1:
         if KV_Heads > 19:
@@ -132,7 +128,7 @@ def smoke_test_overwrite(
                             for task in cuda_tasks(0, 1):
                                 for tid in cuda_threads(0, 1):
                                     O[1, 19, 1, 1000, 32] = 1337
-                                    l_vec[1, 19, 1, 1000] = 1337
+                                    lse[1, 19, 1, 1000] = 1337
 
 
 def make_attn(Hdim: int, causal: bool, cases: List[dict]):
@@ -145,7 +141,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     def p(
         Batch: size, KV_Heads: size, Groups: size, SeqLen: size,
         O: T_type[Batch, KV_Heads, Groups, SeqLen, Hdim] @ CudaGmemLinear,
-        l_vec: L_type[Batch, KV_Heads, Groups, SeqLen] @ CudaGmemLinear,
+        lse: L_type[Batch, KV_Heads, Groups, SeqLen] @ CudaGmemLinear,
         Q: T_type[Batch, KV_Heads, Groups, SeqLen, 1, Hdim] @ CudaGmemLinear,
         K: T_type[Batch, KV_Heads, SeqLen, 1, Hdim] @ CudaGmemLinear,
         V: T_type[Batch, KV_Heads, 1, SeqLen, Hdim] @ CudaGmemLinear,
@@ -175,7 +171,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         causal,
                         SeqLen,
                         scale_factor,
-                        l_vec[batch, kv_head, group, :],
+                        lse[batch, kv_head, group, :],
                         S[0, :, 0, :],
                         QKt[0, :, :],
                     )
@@ -190,7 +186,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         O[batch:batch+1, kv_head, group, :, :],
                     )
         if smoke_test:
-            smoke_test_overwrite(Batch, KV_Heads, Groups, SeqLen, Hdim, O[:, :, :, :, :], l_vec[:, :, :, :])
+            smoke_test_overwrite(Batch, KV_Heads, Groups, SeqLen, Hdim, O[:, :, :, :, :], lse[:, :, :, :])
 
     p = simplify(p)
     p = rename(p, f"unflash_attn_Hdim{Hdim}" + "_causal" * causal)
@@ -201,7 +197,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
             "T_type": str(T_type),
             "L_type": str(L_type),
             "proc": p.name(),
-            "args": ["Batch", "KV_Heads", "Groups", "SeqLen", "O", "l_vec", "Q", "K", "V"],
+            "args": ["Batch", "KV_Heads", "Groups", "SeqLen", "O", "lse", "Q", "K", "V"],
             "SeqLen_divisor": 256,
             "Hdim": Hdim,
             "causal": causal,

@@ -90,7 +90,7 @@ def get_TL_Hdim(j_obj, supported_TL_Hdim):
         return tup
     else:
         raise ValueError(
-            f"Unsupported: T (tensor): {tup[0]}, L (l_vec): {tup[1]}, Hdim: {tup[2]}"
+            f"Unsupported: T (tensor): {tup[0]}, L (lse): {tup[1]}, Hdim: {tup[2]}"
         )
 
 
@@ -383,12 +383,12 @@ def add_attn_fwd_case(fname, cuda_arch, j_obj):
     for arg_name in args:
         if arg_name in ("Batch", "KV_Heads", "Groups", "SeqLen"):
             c_args.append(f"size.{arg_name}")
-        elif arg_name in ("l_vec", "O", "Q", "K", "V"):
+        elif arg_name in ("lse", "O", "Q", "K", "V"):
             c_args.append(arg_name)
         else:
             raise ValueError(f"Unknown arg name {arg_name!r}")
 
-    c_lines.append(f"static void run_{proc}(AttnFwdSize size, {CT}* O, {CL}* l_vec, const {CT}* Q, const {CT}* K, const {CT}* V)")
+    c_lines.append(f"static void run_{proc}(AttnFwdSize size, {CT}* O, {CL}* lse, const {CT}* Q, const {CT}* K, const {CT}* V)")
     c_lines.append("{")
     c_lines.append("    void* ctxt = nullptr;")
     c_lines.append(f"    {proc}({', '.join(c_args)});")

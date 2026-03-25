@@ -133,12 +133,12 @@ std::vector<AttnFwdCaseT<T_type, L_type, Hdim, Causal>>
 make_builtin_cases_attn_fwd()
 {
     auto kittens_run = [] (
-            AttnFwdSize size, exo_bf16* O, float* l_vec, const exo_bf16* Q, const exo_bf16* K, const exo_bf16* V)
+            AttnFwdSize size, exo_bf16* O, float* lse, const exo_bf16* Q, const exo_bf16* K, const exo_bf16* V)
     {
         cudaStream_t exo_cudaStream{};
         kittens_mha_h100::attention_forward(
-                size.Batch, size.KV_Heads, size.Groups, size.SeqLen, size.Hdim, Causal,
-                O, l_vec, const_cast<exo_bf16*>(Q), const_cast<exo_bf16*>(K), const_cast<exo_bf16*>(V),
+                size.Batch, size.KV_Heads, size.Groups, size.SeqLen, size.Hdim, Causal, false,
+                O, lse, const_cast<exo_bf16*>(Q), const_cast<exo_bf16*>(K), const_cast<exo_bf16*>(V),
                 exo_cudaStream);
     };
 
