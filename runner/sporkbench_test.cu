@@ -141,6 +141,11 @@ struct TestTensorSize
     }
 };
 
+struct AttnStatsVectorSize
+{
+    int Batch, KV_Heads, Groups, SeqLen, Hdim;
+};
+
 TestTensorSize to_test_tensor_size(GemmSize size)
 {
     return TestTensorSize{size.L, 1, size.M, size.N};
@@ -157,6 +162,12 @@ TestTensorSize to_test_tensor_size(AttnFwdSize size)
     return TestTensorSize{size.Batch, qo_heads, size.SeqLen, size.Hdim};
 }
 
+TestTensorSize to_test_tensor_size(AttnStatsVectorSize size)
+{
+    const int qo_heads = size.KV_Heads * size.Groups;
+    return TestTensorSize{size.Batch, qo_heads, size.SeqLen, 1};
+}
+
 void print_problem_size(GemmSize size)
 {
     printf("L=%i, MNK=[%i, %i, %i], K_split=%i", size.L, size.M, size.N, size.K_cluster * size.K_split, size.K_split);
@@ -168,6 +179,14 @@ void print_problem_size(GemvSize size)
 }
 
 void print_problem_size(AttnFwdSize size)
+{
+    printf(
+        "Batch=%i, KV_Heads=%i, Groups=%i, SeqLen=%i, Hdim=%i\n",
+        size.Batch, size.KV_Heads, size.Groups, size.SeqLen, size.Hdim
+    );
+}
+
+void print_problem_size(AttnStatsVectorSize size)
 {
     printf(
         "Batch=%i, KV_Heads=%i, Groups=%i, SeqLen=%i, Hdim=%i\n",
@@ -604,9 +623,20 @@ TestResult attn_fwd_case_visitor_impl(
     bool passed = true;
     if (check_mode != TestCheckMode::none) {
         const bool exact = (check_mode == TestCheckMode::exact);
-        passed = launch_device_compare_tensor(
-                size, attn_case.proc_name, resources.d_O_test, resources.d_O_expected, true, exact, stream);
-        // TODO l_vec
+        AttnStatsVectorSize l_vec_size{};
+        l_vec_size.Batch = size.Batch;
+        l_vec_size.KV_Heads = size.KV_Heads;
+        l_vec_size.Groups = size.Groups;
+        l_vec_size.SeqLen = size.SeqLen;
+        l_vec_size.Hdim = size.Hdim;
+        passed &= launch_device_compare_tensor(
+                size, attn_case.proc_name,
+                resources.d_O_test, resources.d_O_expected,
+                true, exact, stream);
+        passed &= launch_device_compare_tensor(
+                l_vec_size, attn_case.proc_name,
+                resources.d_l_vec_test, resources.d_l_vec_expected,
+                true, exact, stream);
     }
 
     cudaStreamSynchronize(stream);

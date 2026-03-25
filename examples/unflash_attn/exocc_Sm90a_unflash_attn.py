@@ -33,10 +33,12 @@ def S_kernel(
     causal: bool,
     SeqLen: size,
     scale_factor: f32 @ CudaGridConstant,
+    l_vec: [L_type][SeqLen] @ CudaGmemLinear,
     S: [T_type][SeqLen, SeqLen] @ CudaGmemLinear,
     QKt: [f32][SeqLen, SeqLen] @ CudaGmemLinear,
 ):
     assert SeqLen % 16 == 0
+    assert stride(l_vec, 0) == 1
     assert stride(S, 1) == 1
     assert stride(QKt, 1) == 1
 
@@ -71,9 +73,12 @@ def S_kernel(
                 cuda_tk_tile_exp(exp_tile[:, :], tile[:, :], dst=f32, src=f32, rows=16, cols=16)
                 cuda_tk_row_sum(sum_accum[:], exp_tile[:, :], dst=f32, src=f32, rows=16, cols=16)
             # Write out each tile exp, divided by denominator
+            # Also accumulate row-sum of S[r, c] prior to exp.
             rcp_tile: f32[16, 16] @ CudaTkWarpTile(16, 16)
             cuda_tk_tile_one(rcp_tile[:, :], dst=f32, rows=16, cols=16)
             cuda_tk_div_row(rcp_tile[:, :], sum_accum[:], dst=f32, src=f32, rows=16, cols=16)
+            se_accum: f32[16] @ CudaTkWarpTile(16, 16).col_vec
+            cuda_tk_vec_zero(se_accum[:], dst=f32, length=16, layout="ortho")
             for c in seq(0, SeqLen / 16):
                 exp_tile: f32[16, 16] @ CudaTkWarpTile(16, 16)
                 cuda_tk_load_rg(
@@ -85,14 +90,30 @@ def S_kernel(
                     cuda_tk_make_causal_neg_inf(16 * r, 16 * c, tile[:, :], dst=f32, rows=16, cols=16)
                 cuda_tk_sub_row(tile[:, :], max_accum[:], dst=f32, src=f32, rows=16, cols=16)
                 cuda_tk_tile_exp(exp_tile[:, :], tile[:, :], dst=f32, src=f32, rows=16, cols=16)
+                cuda_tk_row_sum(se_accum[:], exp_tile[:, :], dst=f32, src=f32, rows=16, cols=16)
                 cuda_tk_tile_mul_lhs(exp_tile[:, :], rcp_tile[:, :], dst=f32, src=f32, rows=16, cols=16)
                 cuda_tk_store_rg(
                     S[16 * r : 16 * r + 16, 16 * c : 16 * c + 16],
                     exp_tile[:, :],
                     dst=T_type, src=f32, size0=16, size1=16)
+            # Write out log-sum-exp
+            # Do the weird scale by -1/scale_factor that ThunderKittens does (but it still doesn't match???)
+            l_smem: L_type[16] @ CudaSmemLinear
+            l_rmem: f32[16] @ CudaTkWarpTile(16, 16).col_vec
+            l_scale: f32 @ CudaRmemUniform(32)
+            l_scale = -1.0 / scale_factor
+            cuda_tk_vec_log(l_rmem[:], se_accum[:], length=16, layout="ortho", dst=f32, src=f32)
+            cuda_tk_vec_add_reduce(l_rmem[:], max_accum[:], length=16, layout="ortho", dst=f32, src=f32)
+            cuda_tk_vec_mul_lhs_scalar(l_rmem[:], l_scale, length=16, layout="ortho", dst=f32, src=f32)
+            cuda_tk_store_vec_rs(l_smem[:], l_rmem[:], length=16, layout="ortho", dst=L_type, src=f32)
+            Fence(cuda_in_order, cuda_in_order)
+            for t in cuda_threads(0, 16):
+                l_vec[r * 16 + t] = l_smem[t]
+            Fence(cuda_in_order, cuda_in_order)
 
 S_kernel = simplify(S_kernel)
 S_kernel = rename(S_kernel, "unflash_attn_S_kernel")
+S_kernel.sync_check(SeqLen=768)
 
 smoke_test = False
 
@@ -154,6 +175,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         causal,
                         SeqLen,
                         scale_factor,
+                        l_vec[batch, kv_head, group, :],
                         S[0, :, 0, :],
                         QKt[0, :, :],
                     )
