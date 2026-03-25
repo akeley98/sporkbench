@@ -134,6 +134,7 @@ struct GemmCaseT
     int K_split_max;
     int K_cluster_divisor;
     int K_cluster_max;
+    bool test_correctness_only;
 
     bool supports(GemmSize size) const
     {
@@ -205,6 +206,7 @@ struct GemvCase
     int M_max;
     int K_divisor;
     int K_max;
+    bool test_correctness_only;
     int flags = 0;
 
     // For now we hard-wire all gemv kernels not to do split K.
@@ -253,6 +255,7 @@ struct AttnFwdCaseT
     int Groups_max;
     int SeqLen_divisor;
     int SeqLen_max;
+    bool test_correctness_only;
     int flags = 0;
 
     bool supports(AttnFwdSize size) const

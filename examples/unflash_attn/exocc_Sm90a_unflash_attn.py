@@ -205,6 +205,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
             "SeqLen_divisor": 256,
             "Hdim": Hdim,
             "causal": causal,
+            "test_correctness_only": True,
         }
         cases.append(j_case)
 

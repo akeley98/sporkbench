@@ -114,6 +114,7 @@ class GemmCase:
     A_type: str
     B_type: str
     C_type: str
+    test_correctness_only: bool
 
 
 @dataclass(slots=True)
@@ -129,6 +130,7 @@ class GemvCase:
     A_type: str
     B_type: str
     C_type: str
+    test_correctness_only: bool
 
 
 @dataclass(slots=True)
@@ -149,6 +151,7 @@ class AttnFwdCase:
     L_type: str
     Hdim: int
     causal: bool
+    test_correctness_only: bool
 
 
 c_lines = []
@@ -182,6 +185,7 @@ gemm_split_k_keys = {
     "K_split_divisor", "K_split_max",
     "K_cluster_divisor", "K_cluster_max",
     "A_type", "B_type", "C_type",
+    "test_correctness_only",
 }
 
 gemm_no_split_k_keys = {
@@ -191,6 +195,7 @@ gemm_no_split_k_keys = {
     "N_divisor", "N_max",
     "K_divisor", "K_max",
     "A_type", "B_type", "C_type",
+    "test_correctness_only",
 }
 
 def add_gemm_case(fname, cuda_arch, j_obj):
@@ -242,6 +247,7 @@ def add_gemm_case(fname, cuda_arch, j_obj):
         A_type=ABC_types[0],
         B_type=ABC_types[1],
         C_type=ABC_types[2],
+        test_correctness_only=bool(j_obj.get("test_correctness_only")),
     )
     if not batch_support and case_obj.L_max != 1:
         raise ValueError(f"L argument must be listed if L_max != 1")
@@ -274,6 +280,7 @@ gemv_keys = {
     "M_divisor", "M_max",
     "K_divisor", "K_max",
     "A_type", "B_type", "C_type",
+    "test_correctness_only",
 }
 
 def add_gemv_case(fname, cuda_arch, j_obj):
@@ -299,6 +306,7 @@ def add_gemv_case(fname, cuda_arch, j_obj):
         A_type=ABC_types[0],
         B_type=ABC_types[1],
         C_type=ABC_types[2],
+        test_correctness_only=bool(j_obj.get("test_correctness_only")),
     )
 
     # Generate run function
@@ -330,6 +338,7 @@ attn_fwd_keys = {
     "SeqLen_divisor", "SeqLen_max",
     "T_type", "L_type",
     "Hdim", "causal",
+    "test_correctness_only",
 }
 
 def add_attn_fwd_case(fname, cuda_arch, j_obj):
@@ -364,6 +373,7 @@ def add_attn_fwd_case(fname, cuda_arch, j_obj):
         T_type=T_type,
         L_type=L_type,
         causal=causal,
+        test_correctness_only=bool(j_obj.get("test_correctness_only")),
     )
 
     # Generate run function
@@ -448,6 +458,7 @@ for abc_types in sorted(gemm_supported_ABC_types):
         c_lines.append(f"    {gemm_case.N_divisor}, {gemm_case.N_max},  // N")
         c_lines.append(f"    {gemm_case.K_split_divisor}, {gemm_case.K_split_max},  // K_split")
         c_lines.append(f"    {gemm_case.K_cluster_divisor}, {gemm_case.K_cluster_max},  // K_cluster")
+        c_lines.append(f"    {int(gemm_case.test_correctness_only)},  // test_correctness_only")
         c_lines.append("  },")
         del gemm_case
     c_lines.append("  };\n")
@@ -470,6 +481,7 @@ for gemv_case in user_gemv_cases:
     c_lines.append(f"    {gemv_case.run_function},")
     c_lines.append(f"    {gemv_case.M_divisor}, {gemv_case.M_max},")
     c_lines.append(f"    {gemv_case.K_divisor}, {gemv_case.K_max},")
+    c_lines.append(f"    {int(gemv_case.test_correctness_only)},  // test_correctness_only")
     c_lines.append("  },")
     del gemv_case
 if not user_gemv_cases:
@@ -517,6 +529,7 @@ for TL_Hdim_causal in sorted(attn_fwd_case_buckets):
         c_lines.append(f"    {attn_fwd_case.Groups_max},")
         c_lines.append(f"    {attn_fwd_case.SeqLen_divisor},")
         c_lines.append(f"    {attn_fwd_case.SeqLen_max},")
+        c_lines.append(f"    {int(attn_fwd_case.test_correctness_only)},  // test_correctness_only")
         c_lines.append("  },")
         del attn_fwd_case
     c_lines.append("  };\n")

@@ -53,6 +53,7 @@ These JSON files must contain a list of objects (`dict`) of the format:
         "T_type": str  # tensor type, attn only (TODO document)
         "Hdim": int  # Head dimension, attn only
         "causal": bool  # attn only
+        "test_correctness_only": bool, default false. Reports 0 TFLOPS if true.
     }
 
 For `gemv`, the args must be some permutation of `["M", "K", "A", "x", "y"]`

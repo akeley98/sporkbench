@@ -16,6 +16,8 @@
 
 namespace sporkbench {
 
+const TestResult TestResult::passed_0_flops{true, 0};
+
 namespace sporkbench_test {
 
 // k_major means that K is the "fast" dimension (i.e. K stride is 1, MN stride is K).
@@ -483,6 +485,10 @@ TestResult gemm_case_visitor_impl(
 
     const cudaStream_t stream = 0;
 
+    if (check_mode == TestCheckMode::none && gemm_case.test_correctness_only) {
+        return TestResult::passed_0_flops;
+    }
+
     // Fill output C matrices with garbage.
     if (check_mode != TestCheckMode::none) {
         cudaMemsetAsync(resources.C_test, 0xDD, sizeof(resources.C_test[0]) * size.L * size.M * size.N);
@@ -546,6 +552,10 @@ TestResult run_gemv_case(
     using namespace ::sporkbench::sporkbench_test;
     const cudaStream_t stream = 0;
 
+    if (check_mode == TestCheckMode::none && gemv_case.test_correctness_only) {
+        return TestResult::passed_0_flops;
+    }
+
     // Fill output y_test with garbage.
     if (check_mode != TestCheckMode::none) {
         cudaMemsetAsync(resources.y_test, 0xDD, sizeof(resources.y_test[0]) * size.M);
@@ -599,6 +609,10 @@ TestResult attn_fwd_case_visitor_impl(
         AttnFwdSize size,
         TestCheckMode check_mode)
 {
+    if (check_mode == TestCheckMode::none && attn_case.test_correctness_only) {
+        return TestResult::passed_0_flops;
+    }
+
     using namespace ::sporkbench::sporkbench_test;
     using Resources = AttnFwdTestResourcesT<T_type, L_type, Hdim, Causal>;
     const Resources resources = std::get<Resources>(resources_union);

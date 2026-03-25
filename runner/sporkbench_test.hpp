@@ -11,6 +11,8 @@ struct TestResult
 {
     bool passed;
     double flops;
+
+    static const TestResult passed_0_flops;
 };
 
 enum class TestCheckMode
