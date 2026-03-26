@@ -178,6 +178,7 @@ for src_info in runner_sources:
         is_Sm90a = "_Sm90a" in fname
     else:
         is_Sm80 = True
+        is_Sm90a = False
     assert is_Sm80 + is_Sm90a == 1, f"{fname} must contain exactly one of _Sm80 or _Sm90a"
     if is_Sm80:
         arch = "Sm80"
