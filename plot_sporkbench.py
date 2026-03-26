@@ -36,6 +36,8 @@ def plot(j_plot, output_dir_name):
         if "GEMM" in title or "Attention" in title:
             # TODO not really peak for Attention
             h100_peak_flops = 494.5e+12
+            if "non-causal" not in title:
+                h100_peak_flops *= 2.0
         elif "GEMV" in title:
             # XXX Is TB 1 trillion bytes or 1 << 40 bytes?
             h100_peak_flops = 3.35e+12 / 4 * 2
