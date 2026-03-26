@@ -13,6 +13,7 @@
 #include "sporkbench_kittens_mha_Sm90a.hpp"
 
 #include "pldi_Sm80_edited/exocc_Sm80_edited.h"
+#include "edited_exo_tk_attn_fwd/edited_tk_attn_fwd_case.hpp"
 
 namespace sporkbench {
 
@@ -156,6 +157,11 @@ make_builtin_cases_attn_fwd()
     kittens_case.SeqLen_divisor = 192;  // !!!
     kittens_case.SeqLen_max = INT32_MAX;
     std::vector<AttnFwdCaseT<T_type, L_type, Hdim, Causal>> cases{kittens_case};
+
+    if constexpr (Hdim == 128 && !Causal) {
+        cases.push_back(edited_tk_attn_fwd_case_bf16_f32_128);
+    }
+
     return cases;
 }
 

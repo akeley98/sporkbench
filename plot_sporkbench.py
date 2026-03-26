@@ -33,13 +33,14 @@ def plot(j_plot, output_dir_name):
     want_peak = False
     if "sm_90a" in title:
         want_peak = True
-        if "GEMM" in title:
+        if "GEMM" in title or "Attention" in title:
+            # TODO not really peak for Attention
             h100_peak_flops = 494.5e+12
         elif "GEMV" in title:
             # XXX Is TB 1 trillion bytes or 1 << 40 bytes?
             h100_peak_flops = 3.35e+12 / 4 * 2
         else:
-            assert 0, "implement peak"
+            assert 0, f"implement peak for {title}"
         ax2 = ax.twinx()
     if "sm_100a" in title:
         assert 0, "TODO fill in peak performance info"
