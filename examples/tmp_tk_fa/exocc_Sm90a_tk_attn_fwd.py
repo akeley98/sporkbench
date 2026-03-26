@@ -12,6 +12,7 @@ from exo.scalars import bf16, f32, inf
 from typing import List
 
 import math
+import time
 
 cases: List[dict]
 cases = []
@@ -26,8 +27,8 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
     inv_sqrt_Hdim = Hdim ** -0.5
     log2_e = math.log2(math.e)
-    ln_2 = math.log(2.0)
-    SeqLen_divisor = 192  # TODO
+    py_ln_2 = math.log(2.0)
+    SeqLen_divisor = 16
     num_consumers = 3
     qo_task_divisor = 64 * num_consumers
     RING = 256 // Hdim
@@ -40,7 +41,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
         CudaWarpConfig("producer", 4, setmaxnreg_dec=32),
     ]
 
-    o_tile_d = Sm90_TkRmemTileD(64)
+    o_tile_d = Sm90_TkRmemTileD(Hdim)
     att_tile = CudaTkWarpTile(16, kv_height)
     att_tile_d = Sm90_TkRmemTileD(kv_height)
     att_tile_a = Sm90_TkRmemTileA(kv_height)
@@ -61,8 +62,9 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
       o_tm = O[:, :, :, :, :] @ Sm90_tensorMap(128, 1, 1, 1, 64, 64)
       q_tm = Q[:, :, :, :, :] @ Sm90_tensorMap(128, 1, 1, 1, 64, 64)
-      k_tm = K[:, :, :, :] @ Sm90_tensorMap(128, 1, 1, 128, 64)
-      v_tm = V[:, :, :, :] @ Sm90_tensorMap(128, 1, 1, 128, 64)
+      k_tm = K[:, :, :, :] @ Sm90_tensorMap(128, 1, 1, kv_height, 64)
+      v_tm = V[:, :, :, :] @ Sm90_tensorMap(128, 1, 1, kv_height, 64)
+      lse_tm = lse[:, :, :, :] @ Sm90_tensorMap(0, 1, 1, 1, 64)
 
       with CudaDeviceFunction(warp_config=my_warp_config):
         for batch in cuda_tasks(0, Batch):
@@ -72,7 +74,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 qo_smem: T_type[num_consumers, Hdim/64, 64, 64] @ Sm90_SmemSwizzled(128)
                 k_smem: T_type[RING, Hdim/64, kv_height, 64] @ Sm90_SmemSwizzled(128)
                 v_smem: T_type[RING, Hdim/64, kv_height, 64] @ Sm90_SmemSwizzled(128)
-                lse_smem: L_type[num_consumers, 64, Hdim] @ CudaSmemLinear
+                lse_smem: L_type[num_consumers, 64] @ CudaSmemLinear
 
                 q_produced: barrier @ CudaMbarrier
                 k_produced: barrier @ CudaMbarrier
@@ -113,7 +115,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 att_block_scaled: f32[num_consumers, 4, 16, kv_height] @ att_tile
                 att_block_exp2: f32[num_consumers, 4, 16, kv_height] @ att_tile
                 att_block_a: T_type[num_consumers, 4, 16, kv_height] @ att_tile_a
-                o_reg: f32[num_consumers, 4, 16, 64] @ o_tile_d
+                o_reg: f32[num_consumers, 4, 16, Hdim] @ o_tile_d
                 max_vec: f32[num_consumers, 4, 16] @ vec
                 norm_vec: f32[num_consumers, 4, 16] @ vec
                 max_vec_last_scaled: f32[num_consumers, 4, 16] @ vec
@@ -124,7 +126,11 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                     for w in cuda_threads(0, 4, unit=cuda_warp):
                       cuda_tk_vec_neg_inf(max_vec[consumer, w, :], length=16, dst=f32, layout=vec_layout)
                       cuda_tk_vec_zero(norm_vec[consumer, w, :], length=16, dst=f32, layout=vec_layout)
-                      cuda_tk_tile_zero(o_reg[consumer, w, :, :], rows=16, cols=64, dst=f32)
+                      cuda_tk_tile_zero(o_reg[consumer, w, :, :], rows=16, cols=Hdim, dst=f32)
+
+                # This handles both the 1/sqrt(d) and the base conversion for using exp2 rather than exp.
+                scale: f32 @ CudaRmemUniform(512)
+                scale = log2_e * inv_sqrt_Hdim
 
                 # Accumulate along K/V height (row number increments by kv_height each iteration)
                 for kv_idx in seq(0, SeqLen / kv_height):
@@ -162,13 +168,9 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                     cg: barrier[num_consumers] @ CudaCommitGroup
                     Await(k_produced, cuda_generic_and_async_proxy, ~0)
                     for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
-                      # This handles both the 1/sqrt(d) and the base conversion for using exp2 rather than exp.
-                      scale: f32 @ CudaRmemUniform(128)
-                      scale = log2_e * inv_sqrt_Hdim
-
                       # First MMA writes block QKt to att_block_d.
-                      # We don't accumulate across iterations, so use scale_d=0 to reset.
-                      # head-dim is the K dimension, and we do this in 2 steps if Hdim is 128.
+                      # We don't accumulate across kv-iterations, so use scale_d=0 to reset.
+                      # head-dim is the K dimension, and we accum in 2 steps if Hdim is 128.
                       Fence(wgmma_fence_1, wgmma_fence_2)
                       Sm90_tk_zero_scale_d(att_block_d[consumer, :, :, :], D=f32, N=kv_height)
                       for hdim64 in seq(0, Hdim / 64, pragma_unroll=0):
@@ -189,6 +191,8 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
                       # TODO causal masking
 
+                    Arrive(cuda_in_order) >> k_consumed
+                    for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                       for w in cuda_threads(0, 4, unit=cuda_warp):
                         # Each warp updates its own [16, kv_height] tiles with non-async code.
                         cuda_tk_row_max(
@@ -228,35 +232,86 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                           dst=T_type, src=f32, rows=16, cols=kv_height)
                         cuda_tk_mul_row(
                           o_reg[consumer, w, :, :], max_vec_last_exp2[consumer, w, :],
-                          dst=f32, src=f32, rows=16, cols=64)
-            ## warp::sub_row(att_block, att_block, max_vec_scaled);
-            ## warp::exp2(att_block, att_block);
-            ## warp::sub(max_vec_last_scaled, max_vec_last_scaled, max_vec_scaled);
-            ## warp::exp2(max_vec_last_scaled,       max_vec_last_scaled);
-            ## warp::mul(norm_vec,            norm_vec,     max_vec_last_exp2);
-            ## warp::row_sum(norm_vec,  att_block, norm_vec);
-            ## warp::add(att_block, att_block, 0.f);
-            ## warp::copy(att_block_mma, att_block);
-            ## warp::mul_row(o_reg, o_reg, max_vec_last_exp2);
-
+                          dst=f32, src=f32, rows=16, cols=Hdim)
                       # End for w in cuda_threads(0, 4, unit=cuda_warp)
 
-                    Arrive(cuda_in_order) >> k_consumed
+                    # Second MMA accumulates to O the product of att_block_exp2
+                    # (cast to T_type, att_block_a) and the current tile of V.
+                    # Both are row major now.
                     Await(v_produced, cuda_generic_and_async_proxy, ~0)
                     for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                       Fence(wgmma_fence_1, wgmma_fence_2)
+                      for hdim64 in seq(0, Hdim / 64, pragma_unroll=0):
+                        Sm90_tk_mma_rmem_row(
+                          o_reg[consumer, :, :, :],
+                          att_block_a[consumer, :, :, :],
+                          v_smem[kv_idx % RING, :, :, :],
+                          D=f32, A=T_type, B=T_type, N64=Hdim // 64, K=kv_height,
+                        )
                       Arrive(wgmma_async) >> cg[consumer]
                       Await(cg[consumer], cuda_generic_and_async_proxy, 0)
                     Arrive(cuda_in_order) >> v_consumed
                   # End with CudaWarps(name="consumer")
                 # End for kv_idx
 
-                Fence(cuda_in_order, cuda_in_order)  # This sync isn't in the original AFAIK
-
+                # Epilogue 1/2: each consumer writes out its own output tile and lse_vec
+                # to SMEM after some final scaling.
                 with CudaWarps(name="consumer"):
                   for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
-                    pass
-                    # TODO write out results.
+                    for w in cuda_threads(0, 4, unit=cuda_warp):
+                      cuda_tk_div_row(
+                        o_reg[consumer, w, :, :], norm_vec[consumer, w, :],
+                        dst=f32, src=f32, rows=16, cols=Hdim)
+                      cuda_tk_store_rs_inner_cols_64(
+                        qo_smem[consumer, :, w * 16: w * 16 + 16, :],
+                        o_reg[consumer, w, :, :],
+                        dst=T_type, src=f32, rows=16, outer_cols=Hdim // 64,
+                      )
+                      ln_2: f32 @ CudaRmemUniform(32)
+                      ln_2 = py_ln_2
+                      cuda_tk_vec_mul_lhs_scalar(
+                        max_vec_scaled[consumer, w, :], ln_2,
+                        dst=f32, src=f32, length=16, layout=vec_layout)
+                      norm_vec_log: f32[16] @ vec
+                      cuda_tk_vec_log(
+                        norm_vec_log[:], norm_vec[consumer, w, :],
+                        dst=f32, src=f32, length=16, layout=vec_layout)
+                      cuda_tk_vec_add_reduce(
+                        norm_vec_log[:], max_vec_scaled[consumer, w, :],
+                        dst=f32, src=f32, length=16, layout=vec_layout)
+                      # NOTE: ThunderKittens here additionally scales norm_vec_log by -sqrt(Hdim)
+                      cuda_tk_store_vec_rs(
+                        lse_smem[consumer, w * 16 : w * 16 + 16], norm_vec_log[:],
+                        dst=L_type, src=f32, length=16, layout=vec_layout)
+
+                Fence(cuda_in_order, cuda_generic_and_async_proxy)
+
+                # Epilogue 2/2: copy staged SMEM outputs to GMEM
+                with CudaWarps(name="consumer"):
+                  for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
+                    with CudaWarps(0, 1):
+                      cg: barrier @ CudaCommitGroup
+                      for hdim64 in seq(0, Hdim / 64):
+                        Sm90_tma_store_2d(
+                          o_tm[batch, kv_head, group,
+                               64 * (consumer + qo_task * num_consumers) :
+                               64 * (consumer + qo_task * num_consumers) + 64,
+                               64 * hdim64 :
+                               64 * hdim64 + 64,
+                          ],
+                          qo_smem[consumer, hdim64, :, :],
+                          dst=T_type, src=T_type, size0=64, size1=64, smem_box=(1, 1, 1, 64, 64), swizzle=128,
+                        )
+                        Sm90_tma_store_1d(
+                          lse_tm[batch, kv_head, group,
+                                 64 * (consumer + qo_task * num_consumers) :
+                                 64 * (consumer + qo_task * num_consumers) + 64,
+                          ],
+                          lse_smem[consumer, :],
+                          dst=L_type, src=L_type, size0=64, smem_box=(1, 1, 1, 64), swizzle=0,
+                        )
+                      Arrive(tma_to_gmem_async) >> cg
+                      Await(cg, cuda_in_order, 0)
 
                 Fence(cuda_in_order, cuda_in_order)
 
@@ -267,7 +322,10 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     for loop_c in p.find_all("for tma_hdim64 in _:_"):
         p = unroll_loop(p, loop_c)
 
+    sync_check_before = time.time()
     p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=1536)
+    dt = time.time() - sync_check_before
+    print(f"{p.name()}.sync_check: %.0f ms" % (1000 * dt,))
 
     if cases is not None:
         j_case = {
@@ -286,6 +344,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
 
 attn_64 = make_attn(64, False, cases)
+# attn_128 = make_attn(128, False, cases)
 
 
 import json
