@@ -34,8 +34,6 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     RING = 256 // Hdim
     kv_height = 128
 
-    assert not causal, "TODO"
-
     my_warp_config = [
         CudaWarpConfig("consumer", 4 * num_consumers, setmaxnreg_inc=160),
         CudaWarpConfig("producer", 4, setmaxnreg_dec=32),
@@ -189,12 +187,20 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                           dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
                       Await(cg[consumer], cuda_generic_and_async_proxy, 0)
 
-                      # TODO causal masking
-
                     Arrive(cuda_in_order) >> k_consumed
                     for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                       for w in cuda_threads(0, 4, unit=cuda_warp):
                         # Each warp updates its own [16, kv_height] tiles with non-async code.
+                        if causal:
+                          cuda_tk_make_causal_neg_inf(
+                            # current row offset
+                            64 * (qo_task * num_consumers + consumer) + 16 * w,
+                            # current col offset
+                            kv_idx * kv_height,
+                            att_block_d[consumer, w, :, :],
+                            dst=f32, rows=16, cols=kv_height,
+                          )
+                        # End if causal
                         cuda_tk_row_max(
                           max_vec[consumer, w, :], att_block_d[consumer, w, :, :],
                           dst=f32, src=f32, rows=16, cols=kv_height)
@@ -342,8 +348,10 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     return p
 
 
-# attn_64 = make_attn(64, False, cases)
+attn_64 = make_attn(64, False, cases)
 attn_128 = make_attn(128, False, cases)
+attn_64_causal = make_attn(64, True, cases)
+attn_128_causal = make_attn(128, True, cases)
 
 
 import json
