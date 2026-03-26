@@ -241,13 +241,12 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                     Await(v_produced, cuda_generic_and_async_proxy, ~0)
                     for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                       Fence(wgmma_fence_1, wgmma_fence_2)
-                      for hdim64 in seq(0, Hdim / 64, pragma_unroll=0):
-                        Sm90_tk_mma_rmem_row(
-                          o_reg[consumer, :, :, :],
-                          att_block_a[consumer, :, :, :],
-                          v_smem[kv_idx % RING, :, :, :],
-                          D=f32, A=T_type, B=T_type, N64=Hdim // 64, K=kv_height,
-                        )
+                      Sm90_tk_mma_rmem_row(
+                        o_reg[consumer, :, :, :],
+                        att_block_a[consumer, :, :, :],
+                        v_smem[kv_idx % RING, :, :, :],
+                        D=f32, A=T_type, B=T_type, N64=Hdim // 64, K=kv_height,
+                      )
                       Arrive(wgmma_async) >> cg[consumer]
                       Await(cg[consumer], cuda_generic_and_async_proxy, 0)
                     Arrive(cuda_in_order) >> v_consumed
@@ -302,14 +301,14 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                           qo_smem[consumer, hdim64, :, :],
                           dst=T_type, src=T_type, size0=64, size1=64, smem_box=(1, 1, 1, 64, 64), swizzle=128,
                         )
-                        Sm90_tma_store_1d(
-                          lse_tm[batch, kv_head, group,
-                                 64 * (consumer + qo_task * num_consumers) :
-                                 64 * (consumer + qo_task * num_consumers) + 64,
-                          ],
-                          lse_smem[consumer, :],
-                          dst=L_type, src=L_type, size0=64, smem_box=(1, 1, 1, 64), swizzle=0,
-                        )
+                      Sm90_tma_store_1d(
+                        lse_tm[batch, kv_head, group,
+                               64 * (consumer + qo_task * num_consumers) :
+                               64 * (consumer + qo_task * num_consumers) + 64,
+                        ],
+                        lse_smem[consumer, :],
+                        dst=L_type, src=L_type, size0=64, smem_box=(1, 1, 1, 64), swizzle=0,
+                      )
                       Arrive(tma_to_gmem_async) >> cg
                       Await(cg, cuda_in_order, 0)
 
@@ -343,8 +342,8 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     return p
 
 
-attn_64 = make_attn(64, False, cases)
-# attn_128 = make_attn(128, False, cases)
+# attn_64 = make_attn(64, False, cases)
+attn_128 = make_attn(128, False, cases)
 
 
 import json
