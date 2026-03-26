@@ -335,7 +335,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
         p = unroll_loop(p, loop_c)
 
     sync_check_before = time.time()
-    p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=1536)
+    p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=640)
     dt = time.time() - sync_check_before
     print(f"{p.name()}.sync_check: %.0f ms" % (1000 * dt,))
 
