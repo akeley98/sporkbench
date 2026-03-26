@@ -5,6 +5,12 @@
 #define EDIT_WGMMA_DESC 1
 #define EDIT_MBARRIER 1
 
+#if EDIT_MBARRIER
+#if !EDIT_NO_PERSISTENT
+#error "mbarrier changes won't work with persistent kernel"
+#endif
+#endif
+
 #include "exocc_Sm90a_edited_tk_attn_fwd.h"
 #if EXO_EXCUT_bENABLE_LOG
 #include "exocc_Sm90a_edited_tk_attn_fwd.excut_str_table"
@@ -1516,9 +1522,6 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
 #if !EDIT_WGMMA_DESC
             const uint64_t exo_descA = exo_CudaUtil::exo_Sm90_smem_descriptor((&qo_smem[(exo_128thr_consumer * 8192 + hdim64 * 4096)]), 1, 512);
             const uint64_t exo_descB = exo_CudaUtil::exo_Sm90_smem_descriptor((&k_smem[((kv_idx & 1) * 16384 + hdim64 * 8192)]), 1, 512);
-#else
-            exo_descA += exo_desc_stride;
-            exo_descB += exo_desc_stride;
 #endif
             asm volatile(
               "{\n\t"
