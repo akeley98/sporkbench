@@ -720,7 +720,7 @@ void generate_attn_fwd_plot_samples(
             // Initialize test data on every warmup iteration, and the first timed iteration.
             // Additional test data generation is not needed as timed iterations always use the same data.
             if (trial_i < num_warmup + 1) {
-                const auto data_code = TestDataCode::random_no_outliers;
+                const auto data_code = TestDataCode::random_with_outliers;
                 init_test_data(resources, size, data_code, data_code, data_code);
             }
 
