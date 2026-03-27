@@ -6,10 +6,14 @@
 #define EDIT_MBARRIER 1
 #define EDIT_SMART_LOOP_BOUNDS 1
 #define EDIT_SHFL_SYNC 1
+#define EDIT_3D_GRID 1
 
-#if EDIT_MBARRIER
 #if !EDIT_NO_PERSISTENT
+#if EDIT_MBARRIER
 #error "mbarrier changes won't work with persistent kernel"
+#endif
+#if EDIT_3D_GRID
+#error "3D grid changes won't work with persistent kernel"
 #endif
 #endif
 
@@ -552,6 +556,7 @@ struct exo_Cuda0_edited_exo_tk_attn_fwd_Hdim128_causal
 
   struct exo_TaskGenerator
   {
+#if !EDIT_3D_GRID
     uint32_t exo_taskIndex;
     uint32_t exo_numClusters;
     uint32_t exo_taskCount;
@@ -606,6 +611,28 @@ struct exo_Cuda0_edited_exo_tk_attn_fwd_Hdim128_causal
       exo_tmp /= exo_cudaTasksNum_batch;
       return exo_task;
     }
+#else
+    uint32_t exo_cudaTasksNum_group;
+    EXO_CUDA_INLINE exo_TaskGenerator(
+        uint32_t cluster_index, uint32_t num_clusters,
+        int_fast32_t _exo_cudaTasksLo_batch, int_fast32_t _exo_cudaTasksHi_batch,
+        int_fast32_t _exo_cudaTasksLo_kv_head, int_fast32_t _exo_cudaTasksHi_kv_head,
+        int_fast32_t _exo_cudaTasksLo_group, int_fast32_t _exo_cudaTasksHi_group,
+        int_fast32_t _exo_cudaTasksLo_qo_task, int_fast32_t _exo_cudaTasksHi_qo_task,
+        const exo_DeviceArgs&)
+    {
+        exo_cudaTasksNum_group = static_cast<uint32_t>(_exo_cudaTasksHi_group - _exo_cudaTasksLo_group);
+    }
+    EXO_CUDA_INLINE exo_Task get_next_task()
+    {
+      exo_Task exo_task;
+      exo_task.batch = task_index_t(blockIdx.z);
+      exo_task.kv_head = task_index_t(blockIdx.y / exo_cudaTasksNum_group);
+      exo_task.group = task_index_t(blockIdx.y % exo_cudaTasksNum_group);
+      exo_task.qo_task = task_index_t(blockIdx.x);
+      return exo_task;
+    }
+#endif
   };
 
   struct exo_SyncState
@@ -1102,9 +1129,13 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   namespace exo_CudaUtil = exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal;
   cudaFuncSetAttribute(exo_deviceFunction0_edited_exo_tk_attn_fwd_Hdim128_causal, cudaFuncAttributeMaxDynamicSharedMemorySize, exo_smemBytes);
 #if EDIT_NO_PERSISTENT
+#if EDIT_3D_GRID
+  const dim3 exo_gridDim(((exo_deviceArgs.SeqLen + 191u) / 192u), exo_deviceArgs.KV_Heads * exo_deviceArgs.Groups, exo_deviceArgs.Batch);
+#else
   const unsigned exo_gridDim = unsigned(
       exo_deviceArgs.Batch * exo_deviceArgs.KV_Heads * exo_deviceArgs.Groups * ((exo_deviceArgs.SeqLen + 191u) / 192u)
   );
+#endif
 #else
   // TODO how expensive is it to query this every time?
   int exo_cudaDevice;
@@ -1115,7 +1146,11 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
 #endif
 
   cudaLaunchConfig_t exo_launchConfig = {};
+#if EDIT_3D_GRID
+  exo_launchConfig.gridDim = exo_gridDim;
+#else
   exo_launchConfig.gridDim = dim3(exo_gridDim, 1, 1);
+#endif
   exo_launchConfig.blockDim = dim3(exo_blockDim, 1, 1);
   exo_launchConfig.dynamicSmemBytes = exo_smemBytes;
   exo_launchConfig.stream = exo_cudaStream;
