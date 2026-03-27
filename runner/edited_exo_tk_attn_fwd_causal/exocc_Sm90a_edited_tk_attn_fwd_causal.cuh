@@ -2091,7 +2091,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         for (int hdim64 = 0; hdim64 < 2; hdim64++) {
           exo_CudaUtil::exo_Sm90_tma_to_gmem(
               exo_deviceArgs.exo_data_o_tm
-            , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[0]) + exo_task.get_batch()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[1]) + exo_task.get_kv_head()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[2]) + exo_task.get_group()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[3]) + 64 * exo_128thr_consumer + 192 * exo_task.get_qo_task()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[4]) + 64 * hdim64)} }
+            , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {GET_OFFSET(exo_deviceArgs.o_tm.C_offsets[0]) + exo_task.get_batch(), GET_OFFSET(exo_deviceArgs.o_tm.C_offsets[1]) + exo_task.get_kv_head(), GET_OFFSET(exo_deviceArgs.o_tm.C_offsets[2]) + exo_task.get_group(), GET_OFFSET(exo_deviceArgs.o_tm.C_offsets[3]) + 64 * exo_128thr_consumer + 192 * exo_task.get_qo_task(), GET_OFFSET(exo_deviceArgs.o_tm.C_offsets[4]) + 64 * hdim64} }
             , (&qo_smem[(exo_128thr_consumer * 8192 + hdim64 * 4096)])
           );
         }
