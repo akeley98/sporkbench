@@ -119,7 +119,8 @@ python3 = {Qarg(python3)}
 nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} -I {Qarg(kittens)} $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
     --expt-extended-lambda --expt-relaxed-constexpr $
-    --keep --keep-dir {Qarg(bin_dir)}
+    --keep --keep-dir {Qarg(bin_dir)} $
+    -Xptxas -v -Xptxas --warn-on-spills
 
 rule nvcc_Sm80
   command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d

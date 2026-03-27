@@ -356,7 +356,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
 
 # attn_64 = make_attn(64, False, cases)
-attn_128 = make_attn(128, False, cases)
+# attn_128 = make_attn(128, False, cases)
 # attn_64_causal = make_attn(64, True, cases)
 attn_128_causal = make_attn(128, True, cases)
 
