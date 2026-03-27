@@ -5,11 +5,18 @@
 #define EDIT_WGMMA_DESC 1
 #define EDIT_MBARRIER 1
 #define EDIT_SMART_LOOP_BOUNDS 1
+#define EDIT_SHFL_SYNC 1
 
 #if EDIT_MBARRIER
 #if !EDIT_NO_PERSISTENT
 #error "mbarrier changes won't work with persistent kernel"
 #endif
+#endif
+
+#if EDIT_SHFL_SYNC
+#define EVIL_SHFL_SYNC(v) __shfl_sync(UINT32_MAX, v, 0)
+#else
+#define EVIL_SHFL_SYNC(v) v
 #endif
 
 #include "exocc_Sm90a_edited_tk_attn_fwd_causal.h"
@@ -1220,7 +1227,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   // k_consumed: barrier(k_produced) @ CudaMbarrier
   // v_consumed: barrier(v_produced) @ CudaMbarrier
   // CudaWarps(0, 1, name='producer')
-  if (int CudaWarps_0_1_producer = (threadIdx.x - 384); CudaWarps_0_1_producer < 32) {
+  if (int CudaWarps_0_1_producer = EVIL_SHFL_SYNC(threadIdx.x - 384); CudaWarps_0_1_producer < 32) {
 #if EDIT_MBARRIER
     kittens::semaphore& mbarrier = exo_syncState.get_q_produced(exo_smem);
 #else
@@ -1320,8 +1327,9 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   for (int kv_idx = 0; kv_idx < ((exo_deviceArgs.SeqLen) / (128)); kv_idx++) {
     if (128 * kv_idx < 192 + 192 * exo_task.qo_task) {
 #endif
+      kv_idx = EVIL_SHFL_SYNC(kv_idx);
       // CudaWarps(0, 1, name='producer')
-      if (int CudaWarps_0_1_producer = (threadIdx.x - 384); CudaWarps_0_1_producer < 32) {
+      if (int CudaWarps_0_1_producer = EVIL_SHFL_SYNC(threadIdx.x - 384); CudaWarps_0_1_producer < 32) {
   #if EDIT_MBARRIER
         kittens::semaphore& kc_mbarrier = exo_syncState.get_k_consumed(exo_smem)[kv_idx & 1];
         kittens::semaphore& kp_mbarrier = exo_syncState.get_k_produced(exo_smem)[kv_idx & 1];
@@ -1506,6 +1514,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   for (int kv_idx = 0; kv_idx < ((exo_deviceArgs.SeqLen) / (128)); kv_idx++) {
     if (128 * kv_idx < 192 + 192 * exo_task.qo_task) {
 #endif
+      kv_idx = EVIL_SHFL_SYNC(kv_idx);
       ; // NO-OP
       // CudaWarps(name='consumer')
       if ([[maybe_unused]] int CudaWarps_None_None_consumer = threadIdx.x; 1) {
@@ -1517,7 +1526,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_syncState.Await0_k_produced(exo_smem, exo_excutLog, 0);
   #endif
         // cuda_threads(0, 3, unit=cuda_warpgroup)
-        if ([[maybe_unused]] int exo_128thr_consumer = (threadIdx.x / 128); 1) {
+        if ([[maybe_unused]] int exo_128thr_consumer = EVIL_SHFL_SYNC(threadIdx.x / 128); 1) {
           // Fence(wgmma_fence_1, wgmma_fence_2)
           asm volatile(
             "wgmma.fence.sync.aligned;"
@@ -1681,7 +1690,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_syncState.Arrive0_k_consumed(exo_smem, exo_excutLog, 0, 1);
   #endif
         // cuda_threads(0, 3, unit=cuda_warpgroup)
-        if ([[maybe_unused]] int exo_128thr_consumer = (threadIdx.x / 128); 1) {
+        if ([[maybe_unused]] int exo_128thr_consumer = EVIL_SHFL_SYNC(threadIdx.x / 128); 1) {
           // cuda_threads(0, 4, unit=cuda_warp)
           if ([[maybe_unused]] int exo_32thr_w = (threadIdx.x % 128 / 32); 1) {
             #pragma unroll
@@ -1720,7 +1729,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_syncState.Await0_v_produced(exo_smem, exo_excutLog, 0);
   #endif
         // cuda_threads(0, 3, unit=cuda_warpgroup)
-        if ([[maybe_unused]] int exo_128thr_consumer = (threadIdx.x / 128); 1) {
+        if ([[maybe_unused]] int exo_128thr_consumer = EVIL_SHFL_SYNC(threadIdx.x / 128); 1) {
           // Fence(wgmma_fence_1, wgmma_fence_2)
           asm volatile(
             "wgmma.fence.sync.aligned;"
@@ -1996,9 +2005,9 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   // CudaWarps(name='consumer')
   if ([[maybe_unused]] int CudaWarps_None_None_consumer = threadIdx.x; 1) {
     // cuda_threads(0, 3, unit=cuda_warpgroup)
-    if ([[maybe_unused]] int exo_128thr_consumer = (threadIdx.x / 128); 1) {
+    if ([[maybe_unused]] int exo_128thr_consumer = EVIL_SHFL_SYNC(threadIdx.x / 128); 1) {
       // cuda_threads(0, 4, unit=cuda_warp)
-      if ([[maybe_unused]] int exo_32thr_w = (threadIdx.x % 128 / 32); 1) {
+      if ([[maybe_unused]] int exo_32thr_w = EVIL_SHFL_SYNC(threadIdx.x % 128 / 32); 1) {
         ::kittens::warp::div_row(o_reg.tile, o_reg.tile, norm_vec);
         {  // Place SMEM handle in named temporary, because ThunderKittens is not const-correct.
           auto exo_tk_subtile = qo_smem[(exo_128thr_consumer * 8192)].template as_tk_subtile<2, 16, 64, ::kittens::st_bf>(0, (16 * exo_32thr_w), 0);
@@ -2030,7 +2039,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   // CudaWarps(name='consumer')
   if ([[maybe_unused]] int CudaWarps_None_None_consumer = threadIdx.x; 1) {
     // cuda_threads(0, 3, unit=cuda_warpgroup)
-    if ([[maybe_unused]] int exo_128thr_consumer = (threadIdx.x / 128); 1) {
+    if ([[maybe_unused]] int exo_128thr_consumer = EVIL_SHFL_SYNC(threadIdx.x / 128); 1) {
       // CudaWarps(0, 1)
       if (int CudaWarps_0_1_consumer = (threadIdx.x % 128); CudaWarps_0_1_consumer < 32) {
         // cg: barrier @ CudaCommitGroup
