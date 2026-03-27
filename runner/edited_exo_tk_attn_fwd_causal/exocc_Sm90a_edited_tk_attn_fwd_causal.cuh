@@ -556,15 +556,27 @@ struct exo_Cuda0_edited_exo_tk_attn_fwd_Hdim128_causal
 
   struct exo_Task
   {
+#if !EDIT_3D_GRID
     task_index_t batch;
     task_index_t kv_head;
     task_index_t group;
     task_index_t qo_task;
+    EXO_CUDA_INLINE task_index_t get_batch() const { return batch; }
+    EXO_CUDA_INLINE task_index_t get_kv_head() const { return kv_head; }
+    EXO_CUDA_INLINE task_index_t get_group() const { return group; }
+    EXO_CUDA_INLINE task_index_t get_qo_task() const { return qo_task; }
+#else
+    task_index_t num_groups;
+    EXO_CUDA_INLINE task_index_t get_batch() const { return task_index_t(blockIdx.z); }
+    EXO_CUDA_INLINE task_index_t get_kv_head() const { return task_index_t(blockIdx.y) / num_groups; }
+    EXO_CUDA_INLINE task_index_t get_group() const { return task_index_t(blockIdx.y) % num_groups; }
+    EXO_CUDA_INLINE task_index_t get_qo_task() const { return task_index_t(blockIdx.x); }
+#endif
   };
 
+#if !EDIT_3D_GRID
   struct exo_TaskGenerator
   {
-#if !EDIT_3D_GRID
     uint32_t exo_taskIndex;
     uint32_t exo_numClusters;
     uint32_t exo_taskCount;
@@ -619,29 +631,8 @@ struct exo_Cuda0_edited_exo_tk_attn_fwd_Hdim128_causal
       exo_tmp /= exo_cudaTasksNum_batch;
       return exo_task;
     }
-#else
-    uint32_t exo_cudaTasksNum_group;
-    EXO_CUDA_INLINE exo_TaskGenerator(
-        uint32_t cluster_index, uint32_t num_clusters,
-        int_fast32_t _exo_cudaTasksLo_batch, int_fast32_t _exo_cudaTasksHi_batch,
-        int_fast32_t _exo_cudaTasksLo_kv_head, int_fast32_t _exo_cudaTasksHi_kv_head,
-        int_fast32_t _exo_cudaTasksLo_group, int_fast32_t _exo_cudaTasksHi_group,
-        int_fast32_t _exo_cudaTasksLo_qo_task, int_fast32_t _exo_cudaTasksHi_qo_task,
-        const exo_DeviceArgs&)
-    {
-        exo_cudaTasksNum_group = static_cast<uint32_t>(_exo_cudaTasksHi_group - _exo_cudaTasksLo_group);
-    }
-    EXO_CUDA_INLINE exo_Task get_next_task()
-    {
-      exo_Task exo_task;
-      exo_task.batch = task_index_t(blockIdx.z);
-      exo_task.kv_head = task_index_t(blockIdx.y / exo_cudaTasksNum_group);
-      exo_task.group = task_index_t(blockIdx.y % exo_cudaTasksNum_group);
-      exo_task.qo_task = task_index_t(blockIdx.x);
-      return exo_task;
-    }
-#endif
   };
+#endif
 
   struct exo_SyncState
   {
@@ -1280,7 +1271,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     exo_CudaUtil::exo_Sm90_tma_to_smem(
         (&qo_smem[0])
       , exo_deviceArgs.exo_data_q_tm
-      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 192 * exo_task.qo_task), GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4])} }
+      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 192 * exo_task.get_qo_task()), GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4])} }
 #if EDIT_MBARRIER
       , exo_smemU32(&mbarrier)
 #else
@@ -1291,7 +1282,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     exo_CudaUtil::exo_Sm90_tma_to_smem(
         (&qo_smem[4096])
       , exo_deviceArgs.exo_data_q_tm
-      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 192 * exo_task.qo_task), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4]) + 64)} }
+      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 192 * exo_task.get_qo_task()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4]) + 64)} }
 #if EDIT_MBARRIER
       , exo_smemU32(&mbarrier)
 #else
@@ -1302,7 +1293,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     exo_CudaUtil::exo_Sm90_tma_to_smem(
         (&qo_smem[8192])
       , exo_deviceArgs.exo_data_q_tm
-      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 64 + 192 * exo_task.qo_task), GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4])} }
+      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 64 + 192 * exo_task.get_qo_task()), GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4])} }
 #if EDIT_MBARRIER
       , exo_smemU32(&mbarrier)
 #else
@@ -1313,7 +1304,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     exo_CudaUtil::exo_Sm90_tma_to_smem(
         (&qo_smem[12288])
       , exo_deviceArgs.exo_data_q_tm
-      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 64 + 192 * exo_task.qo_task), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4]) + 64)} }
+      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 64 + 192 * exo_task.get_qo_task()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4]) + 64)} }
 #if EDIT_MBARRIER
       , exo_smemU32(&mbarrier)
 #else
@@ -1324,7 +1315,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     exo_CudaUtil::exo_Sm90_tma_to_smem(
         (&qo_smem[16384])
       , exo_deviceArgs.exo_data_q_tm
-      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 128 + 192 * exo_task.qo_task), GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4])} }
+      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 128 + 192 * exo_task.get_qo_task()), GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4])} }
 #if EDIT_MBARRIER
       , exo_smemU32(&mbarrier)
 #else
@@ -1335,7 +1326,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     exo_CudaUtil::exo_Sm90_tma_to_smem(
         (&qo_smem[20480])
       , exo_deviceArgs.exo_data_q_tm
-      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 128 + 192 * exo_task.qo_task), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4]) + 64)} }
+      , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {(GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[3]) + 128 + 192 * exo_task.get_qo_task()), (GET_OFFSET(exo_deviceArgs.q_tm.C_offsets[4]) + 64)} }
 #if EDIT_MBARRIER
       , exo_smemU32(&mbarrier)
 #else
@@ -1364,11 +1355,11 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   ; // NO-OP
   ; // NO-OP
 #if EDIT_SMART_LOOP_BOUNDS
-  for (int kv_idx = 0; 128 * kv_idx < 192 + 192 * exo_task.qo_task; kv_idx++) {
+  for (int kv_idx = 0; 128 * kv_idx < 192 + 192 * exo_task.get_qo_task(); kv_idx++) {
     {
 #else
   for (int kv_idx = 0; kv_idx < ((exo_deviceArgs.SeqLen) / (128)); kv_idx++) {
-    if (128 * kv_idx < 192 + 192 * exo_task.qo_task) {
+    if (128 * kv_idx < 192 + 192 * exo_task.get_qo_task()) {
 #endif
       kv_idx = EVIL_SHFL_SYNC(kv_idx);
       // CudaWarps(0, 1, name='producer')
@@ -1386,7 +1377,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_CudaUtil::exo_Sm90_tma_to_smem(
             (&k_smem[((kv_idx & 1) * 16384)])
           , exo_deviceArgs.exo_data_k_tm
-          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[2]) + 128 * kv_idx), GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[3])} }
+          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[2]) + 128 * kv_idx), GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[3])} }
   #if EDIT_MBARRIER
           , exo_smemU32(&kp_mbarrier)
   #else
@@ -1397,7 +1388,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_CudaUtil::exo_Sm90_tma_to_smem(
             (&k_smem[((kv_idx & 1) * 16384 + 8192)])
           , exo_deviceArgs.exo_data_k_tm
-          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[2]) + 128 * kv_idx), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[3]) + 64)} }
+          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[2]) + 128 * kv_idx), (GET_OFFSET(exo_deviceArgs.k_tm.C_offsets[3]) + 64)} }
   #if EDIT_MBARRIER
           , exo_smemU32(&kp_mbarrier)
   #else
@@ -1426,7 +1417,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_CudaUtil::exo_Sm90_tma_to_smem(
             (&v_smem[((kv_idx & 1) * 16384)])
           , exo_deviceArgs.exo_data_v_tm
-          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[2]) + 128 * kv_idx), GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[3])} }
+          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[2]) + 128 * kv_idx), GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[3])} }
   #if EDIT_MBARRIER
           , exo_smemU32(&vp_mbarrier)
   #else
@@ -1437,7 +1428,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_CudaUtil::exo_Sm90_tma_to_smem(
             (&v_smem[((kv_idx & 1) * 16384 + 8192)])
           , exo_deviceArgs.exo_data_v_tm
-          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[2]) + 128 * kv_idx), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[3]) + 64)} }
+          , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[2]) + 128 * kv_idx), (GET_OFFSET(exo_deviceArgs.v_tm.C_offsets[3]) + 64)} }
   #if EDIT_MBARRIER
           , exo_smemU32(&vp_mbarrier)
   #else
@@ -1562,11 +1553,11 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   float scale;
   scale = 0.12751743082459868f;
 #if EDIT_SMART_LOOP_BOUNDS
-  for (int kv_idx = 0; 128 * kv_idx < 192 + 192 * exo_task.qo_task; kv_idx++) {
+  for (int kv_idx = 0; 128 * kv_idx < 192 + 192 * exo_task.get_qo_task(); kv_idx++) {
     {
 #else
   for (int kv_idx = 0; kv_idx < ((exo_deviceArgs.SeqLen) / (128)); kv_idx++) {
-    if (128 * kv_idx < 192 + 192 * exo_task.qo_task) {
+    if (128 * kv_idx < 192 + 192 * exo_task.get_qo_task()) {
 #endif
       kv_idx = EVIL_SHFL_SYNC(kv_idx);
       ; // NO-OP
@@ -1751,7 +1742,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
             for (int exo_causal_r = 0; exo_causal_r < 1; ++exo_causal_r) {
               #pragma unroll
               for (int exo_causal_c = 0; exo_causal_c < 8; ++exo_causal_c) {
-                int exo_causal_delta = exo_causal_r * 16 - exo_causal_c * 16 + static_cast<int>((16 * exo_32thr_w + 64 * exo_128thr_consumer + 192 * exo_task.qo_task) - (128 * kv_idx));
+                int exo_causal_delta = exo_causal_r * 16 - exo_causal_c * 16 + static_cast<int>((16 * exo_32thr_w + 64 * exo_128thr_consumer + 192 * exo_task.get_qo_task()) - (128 * kv_idx));
                 ::kittens::rt<float, 16, 16> exo_causal_subtile;
                 exo_causal_subtile.tiles[0][0] = att_block_d.tile.tiles[exo_causal_r][exo_causal_c];
                 const auto exo_causal_identity = ::kittens::base_types::constants<float>::neg_infty();
@@ -2100,13 +2091,13 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         for (int hdim64 = 0; hdim64 < 2; hdim64++) {
           exo_CudaUtil::exo_Sm90_tma_to_gmem(
               exo_deviceArgs.exo_data_o_tm
-            , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[0]) + exo_task.batch), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[1]) + exo_task.kv_head), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[2]) + exo_task.group), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[3]) + 64 * exo_128thr_consumer + 192 * exo_task.qo_task), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[4]) + 64 * hdim64)} }
+            , (exo_win_2bf16_Sm90_tensorMap_128_1_1_1_64_64) { {GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[0]) + exo_task.get_batch()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[1]) + exo_task.get_kv_head()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[2]) + exo_task.get_group()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[3]) + 64 * exo_128thr_consumer + 192 * exo_task.get_qo_task()), GET_OFFSET((exo_deviceArgs.o_tm.C_offsets[4]) + 64 * hdim64)} }
             , (&qo_smem[(exo_128thr_consumer * 8192 + hdim64 * 4096)])
           );
         }
         exo_CudaUtil::exo_Sm90_tma_to_gmem(
             exo_deviceArgs.exo_data_lse_tm
-          , (exo_win_1f32_Sm90_tensorMap_0_1_1_1_64) { {(GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[0]) + exo_task.batch), (GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[1]) + exo_task.kv_head), (GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[2]) + exo_task.group), (GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[3]) + 64 * exo_128thr_consumer + 192 * exo_task.qo_task)} }
+          , (exo_win_1f32_Sm90_tensorMap_0_1_1_1_64) { {(GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[0]) + exo_task.get_batch()), (GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[1]) + exo_task.get_kv_head()), (GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[2]) + exo_task.get_group()), (GET_OFFSET(exo_deviceArgs.lse_tm.C_offsets[3]) + 64 * exo_128thr_consumer + 192 * exo_task.get_qo_task())} }
           , (&lse_smem[exo_128thr_consumer * 64])
         );
         // Arrive(tma_to_gmem_async, 1) >> cg
@@ -2156,6 +2147,11 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
   if (nreg == ((int32_t) 32)) {
     asm("setmaxnreg.dec.sync.aligned.u32 32;");
     if (int tmp = threadIdx.x; tmp >= 384 && tmp < 512) {
+#if EDIT_3D_GRID
+      exo_Task task;
+      task.num_groups = task_index_t(exo_deviceArgs.Groups);
+      exo_deviceTask_producer(exo_smem, exo_syncState, exo_deviceArgs, task, exo_excutLog);
+#else
       {
         int_fast32_t exo_cudaTasksLo_batch = 0;
         int_fast32_t exo_cudaTasksHi_batch = exo_deviceArgs.Batch;
@@ -2187,11 +2183,17 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
           }
         }
       }
+#endif
     }
   }
   if (nreg == ((int32_t) 160)) {
     asm("setmaxnreg.inc.sync.aligned.u32 160;");
     if (int tmp = threadIdx.x; tmp >= 0 && tmp < 384) {
+#if EDIT_3D_GRID
+      exo_Task task;
+      task.num_groups = task_index_t(exo_deviceArgs.Groups);
+      exo_deviceTask_consumer(exo_smem, exo_syncState, exo_deviceArgs, task, exo_excutLog);
+#else
       {
         int_fast32_t exo_cudaTasksLo_batch = 0;
         int_fast32_t exo_cudaTasksHi_batch = exo_deviceArgs.Batch;
@@ -2223,6 +2225,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
           }
         }
       }
+#endif
     }
   }
 }
