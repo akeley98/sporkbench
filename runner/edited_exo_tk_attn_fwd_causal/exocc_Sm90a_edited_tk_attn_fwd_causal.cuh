@@ -9,6 +9,7 @@
 #define EDIT_3D_GRID 1
 #define EDIT_ALIAS_TILES 1
 #define EDIT_NO_TENSORMAP_OFFSETS 1
+#define EDIT_SMEM_MBARRIER_ALLOC 1
 
 #if !EDIT_NO_PERSISTENT
 #if EDIT_MBARRIER
@@ -29,6 +30,12 @@
 #define GET_OFFSET(x) 0
 #else
 #define GET_OFFSET(x) x
+#endif
+
+#if EDIT_SMEM_MBARRIER_ALLOC
+#if !EDIT_MBARRIER
+#error "Mbarrier allocation changes require kittens::mbarrier usage"
+#endif
 #endif
 
 #include "exocc_Sm90a_edited_tk_attn_fwd_causal.h"
@@ -321,6 +328,13 @@ struct exo_win_1f32c {
 #endif
 
 namespace exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal {
+
+__shared__ kittens::semaphore v_consumed_smem[2];
+__shared__ kittens::semaphore k_consumed_smem[2];
+__shared__ kittens::semaphore v_produced_smem[2];
+__shared__ kittens::semaphore k_produced_smem[2];
+__shared__ kittens::semaphore q_produced_smem;
+
 namespace exo_CudaUtil = ::exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal;
 /* Required by Sm90_tk_mma_rmem_row(D,A,B,D=f32, A=bf16, B=bf16, N64=2, K=128, swizzle=128) */
 /* Required by Sm90_tk_mma_row_col(D,A,B,D=f32, A=bf16, B=bf16, N=128, K=64, swizzle=128) */
@@ -645,11 +659,19 @@ struct exo_Cuda0_edited_exo_tk_attn_fwd_Hdim128_causal
   // static constexpr unsigned exo_smemOffset9_q_produced = 72;  // 8-byte allocation
     EXO_CUDA_INLINE kittens::semaphore* get_v_consumed(char* exo_smem)
     {
+#if EDIT_SMEM_MBARRIER_ALLOC
+        return exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal::v_consumed_smem;
+#else
         return reinterpret_cast<kittens::semaphore*>(exo_smem + exo_smemOffset4_v_consumed);
+#endif
     }
     EXO_CUDA_INLINE kittens::semaphore* get_k_consumed(char* exo_smem)
     {
+#if EDIT_SMEM_MBARRIER_ALLOC
+        return exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal::k_consumed_smem;
+#else
         return reinterpret_cast<kittens::semaphore*>(exo_smem + exo_smemOffset5_k_consumed);
+#endif
     }
     // EXO_CUDA_INLINE kittens::semaphore& get_q_tmp_barrier(char* exo_smem)
     // {
@@ -657,15 +679,27 @@ struct exo_Cuda0_edited_exo_tk_attn_fwd_Hdim128_causal
     // }
     EXO_CUDA_INLINE kittens::semaphore* get_v_produced(char* exo_smem)
     {
+#if EDIT_SMEM_MBARRIER_ALLOC
+        return exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal::v_produced_smem;
+#else
         return reinterpret_cast<kittens::semaphore*>(exo_smem + exo_smemOffset7_v_produced);
+#endif
     }
     EXO_CUDA_INLINE kittens::semaphore* get_k_produced(char* exo_smem)
     {
+#if EDIT_SMEM_MBARRIER_ALLOC
+        return exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal::k_produced_smem;
+#else
         return reinterpret_cast<kittens::semaphore*>(exo_smem + exo_smemOffset8_k_produced);
+#endif
     }
     EXO_CUDA_INLINE kittens::semaphore& get_q_produced(char* exo_smem)
     {
+#if EDIT_SMEM_MBARRIER_ALLOC
+        return exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal::q_produced_smem;
+#else
         return reinterpret_cast<kittens::semaphore&>(exo_smem[exo_smemOffset9_q_produced]);
+#endif
     }
 #else
     // v_consumed: barrier @ CudaMbarrier, ring=2, slice_count=1
@@ -1168,7 +1202,52 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
     const exo_DeviceArgs& exo_deviceArgs,
     exo_ExcutThreadLog exo_excutLog)
 {
+  namespace exo_CudaUtil = exo_CudaUtil_exocc_Sm90a_edited_tk_attn_fwd_causal;
   if (threadIdx.x == 0) {
+#if EDIT_SMEM_MBARRIER_ALLOC
+    for (int i = 0; i < 2; ++i) {
+        asm volatile(
+          "mbarrier.init.shared::cta.b64 [%0], 384;"
+            :
+            :"r"(exo_smemU32(&exo_CudaUtil::v_consumed_smem[i]))
+        );
+    }
+    for (int i = 0; i < 2; ++i) {
+        asm volatile(
+          "mbarrier.init.shared::cta.b64 [%0], 384;"
+            :
+            :"r"(exo_smemU32(&exo_CudaUtil::k_consumed_smem[i]))
+        );
+    }
+    // for (int i = 0; i < 1; ++i) {
+    //     asm volatile(
+    //       "mbarrier.init.shared::cta.b64 [%0], 384;"
+    //         :
+    //         :"r"(exo_smemU32(exo_smem + exo_smemOffset6_q_tmp_barrier + 8*i))
+    //     );
+    // }
+    for (int i = 0; i < 2; ++i) {
+        asm volatile(
+          "mbarrier.init.shared::cta.b64 [%0], 32;"
+            :
+            :"r"(exo_smemU32(&exo_CudaUtil::v_produced_smem[i]))
+        );
+    }
+    for (int i = 0; i < 2; ++i) {
+        asm volatile(
+          "mbarrier.init.shared::cta.b64 [%0], 32;"
+            :
+            :"r"(exo_smemU32(&exo_CudaUtil::k_produced_smem[i]))
+        );
+    }
+    for (int i = 0; i < 1; ++i) {
+        asm volatile(
+          "mbarrier.init.shared::cta.b64 [%0], 32;"
+            :
+            :"r"(exo_smemU32(&exo_CudaUtil::q_produced_smem))
+        );
+    }
+#else
     for (int i = 0; i < 2; ++i) {
         asm volatile(
           "mbarrier.init.shared::cta.b64 [%0], 384;"
@@ -1229,6 +1308,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd_causal::exo_Cuda0_edited_exo_tk_at
         exo_excutLog.log_u32_arg(exo_smemU32(exo_smem + exo_smemOffset9_q_produced + 8*i));
         exo_excutLog.log_u32_arg(static_cast<uint32_t>(32));
     }
+#endif
     asm volatile(
       "fence.proxy.async;"
     );
