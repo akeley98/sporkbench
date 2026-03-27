@@ -229,12 +229,7 @@ __global__ void device_compare_tensor_test(TestTensorSize size, const Test* d_te
                 else {
                     float f_test = float(d_test[linear_index]);
                     float f_expected = float(d_expected[linear_index]);
-                    if (fabsf(f_test - f_expected) <= 1.0f / 1024) {
-                        // Any absolute difference <= 1/1024 is a pass.
-                        // Note the <= will always be false for NaN.
-                        correct = true;
-                    }
-                    else if (f_test * f_expected >= 0.0f) {
+                    if (f_test * f_expected >= 0.0f) {
                         // Allow same-sign values with small relative ratio.
                         f_test = fabsf(f_test);
                         f_expected = fabsf(f_expected);
