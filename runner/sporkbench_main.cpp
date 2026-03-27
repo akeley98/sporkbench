@@ -715,7 +715,7 @@ void generate_attn_fwd_plot_samples(
             size.Hdim = Hdim;
             size.SeqLen = SeqLen;
 
-            const auto check_mode = trial_i == 0 ? TestCheckMode::approximate : TestCheckMode::none;
+            const auto check_mode = num_warmup > 0 && trial_i == 0 ? TestCheckMode::approximate : TestCheckMode::none;
 
             // Initialize test data on every warmup iteration, and the first timed iteration.
             // Additional test data generation is not needed as timed iterations always use the same data.
