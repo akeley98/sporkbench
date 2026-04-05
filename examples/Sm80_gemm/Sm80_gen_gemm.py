@@ -89,7 +89,7 @@ def make_Sm80_gemm(config: Sm80GemmConfig, *, use_mbarrier: bool):
                 for n_task in cuda_tasks(0, (N + smem_N - 1) / smem_N):
                   # Per CTA code
                   raw: barrier @ CudaMbarrier
-                  war: barrier(raw) @ CudaMbarrier
+                  war: barrier @ CudaMbarrier
 
                   # Tiles (ring buffered)
                   A_smem: f32[RING, smem_16B_K, smem_M, 4] @ smem_type

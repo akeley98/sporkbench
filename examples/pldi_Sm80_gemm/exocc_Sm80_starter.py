@@ -323,7 +323,7 @@ def starter_ring_smem_gemm(L: size, M: size, N: size, K: size, C: f32[L, M, N] @
                     B_smem: f16[RING, 128, 32] @ Sm90_SmemSwizzled(128)
                     A_rmem: f16[2, 2, 8, 4, 2, 8, 2, 2] @ CudaRmemPacked32
                     B_rmem: f16[2, 2, 8, 4, 2, 8, 2, 2] @ CudaRmemPacked32
-                    cg: barrier[128] @ CudaCommitGroup
+                    cg: barrier[128] @ Sm80_CommitGroup
 
                     for ks in seq(0, RING - 1, pragma_unroll=0):
                         A_tile = A[batch, m_task * 128 : m_task * 128 + 128, ks * 32 : ks * 32 + 32]
