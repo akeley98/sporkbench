@@ -29,11 +29,11 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     inv_sqrt_Hdim = Hdim ** -0.5
     log2_e = math.log2(math.e)
     py_ln_2 = math.log(2.0)
-    SeqLen_divisor = 16
     num_consumers = 3
     qo_task_divisor = 64 * num_consumers
     RING = 256 // Hdim
     kv_height = 128
+    SeqLen_divisor = kv_height
 
     my_warp_config = [
         CudaWarpConfig("consumer", 4 * num_consumers, setmaxnreg_inc=160),
@@ -58,6 +58,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
         V: T_type[Batch, KV_Heads, SeqLen, Hdim] @ CudaGmemLinear,
     ):
       assert SeqLen % SeqLen_divisor == 0
+      assert SeqLen > 0
 
       o_tm = O[:, :, :, :, :] @ Sm90_tensorMap(128, 1, 1, 1, 64, 64)
       q_tm = Q[:, :, :, :, :] @ Sm90_tensorMap(128, 1, 1, 1, 64, 64)
@@ -75,19 +76,19 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 v_smem: T_type[RING, Hdim/64, kv_height, 64] @ Sm90_SmemSwizzled(128)
                 lse_smem: L_type[num_consumers, 64] @ CudaSmemLinear
 
-                q_produced: barrier @ CudaMbarrier
-                k_produced: barrier @ CudaMbarrier
-                v_produced: barrier @ CudaMbarrier
+                q_produced: barrier[1 @ ring_buffer_by(1)] @ CudaMbarrierPreArrive(0)
+                k_produced: barrier[(SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
+                v_produced: barrier[(SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
                 # ThunderKittens has a single compute_done variable.
-                # These are separated to q/k/v due to Exo-GPU mbarrier pairing requirements.
-                # This is an issue that needs to go away.
-                q_tmp_barrier: barrier(q_produced) @ CudaMbarrier
-                k_consumed: barrier(k_produced) @ CudaMbarrier
-                v_consumed: barrier(v_produced) @ CudaMbarrier
+                # These are separated to q/k/v here.
+                # The q_consumed barrier only makes sense for a persistent kernel.
+                q_consumed: barrier[2 @ ring_buffer_by(1)] @ CudaMbarrierPreArrive(1)
+                k_consumed: barrier[(RING + SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
+                v_consumed: barrier[(RING + SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
 
                 with CudaWarps(0, 1, name="producer"):
                   # Load the Q tile for each consumer warpgroup.
-                  Await(q_tmp_barrier, cuda_temporal, ~1)
+                  Await(q_consumed[0], cuda_temporal, 0)
                   # TODO I should not have to unroll these tma_* loops.
                   for tma_consumer in seq(0, num_consumers):
                     for tma_hdim64 in seq(0, Hdim/64):
@@ -99,14 +100,14 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                              64 * tma_hdim64 :
                              64 * tma_hdim64 + 64],
                         size0=64, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, 1, 64, 64),
-                      ) >> q_produced
-                  Arrive(cuda_temporal) >> q_produced
+                      ) >> q_produced[0]
+                  Arrive(cuda_temporal) >> q_produced[0]
                 # End CudaWarps(0, 1, name="producer")
 
                 # Wait for the Q tile to show up before entering main loop.
                 with CudaWarps(name="consumer"):
-                  Await(q_produced, cuda_generic_and_async_proxy, ~0)
-                  Arrive(cuda_temporal) >> q_tmp_barrier
+                  Await(q_produced[0], cuda_generic_and_async_proxy, 0)
+                  Arrive(cuda_in_order) >> q_consumed[1]
                 # End CudaWarps(name="consumer")
 
                 # Initialize consumer state
@@ -140,7 +141,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                   if non_causal or kv_idx * kv_height < (1 + qo_task) * num_consumers * 64:
                     with CudaWarps(0, 1, name="producer"):
                       # Load K tile for iteration, shared by all consumers.
-                      Await(k_consumed, cuda_temporal, ~RING)
+                      Await(k_consumed[kv_idx], cuda_temporal, 0)
                       # TODO I should not have to unroll these tma_* loops.
                       for tma_hdim64 in seq(0, Hdim/64):
                         Sm90_tma_load_2d(
@@ -151,10 +152,10 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                                tma_hdim64 * 64 :
                                tma_hdim64 * 64 + 64],
                           size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
-                        ) >> k_produced
-                      Arrive(cuda_temporal) >> k_produced
+                        ) >> k_produced[kv_idx]
+                      Arrive(cuda_temporal) >> k_produced[kv_idx]
                       # Load V tile for iteration, shared by all consumers.
-                      Await(v_consumed, cuda_temporal, ~RING)
+                      Await(v_consumed[kv_idx], cuda_temporal, 0)
                       for tma_hdim64 in seq(0, Hdim/64):
                         Sm90_tma_load_2d(
                           v_smem[kv_idx % RING, tma_hdim64, :, :],
@@ -164,13 +165,13 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                                tma_hdim64 * 64 :
                                tma_hdim64 * 64 + 64],
                           size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
-                        ) >> v_produced
-                      Arrive(cuda_temporal) >> v_produced
+                        ) >> v_produced[kv_idx]
+                      Arrive(cuda_temporal) >> v_produced[kv_idx]
                     # End CudaWarps(0, 1, name="producer")
 
                     with CudaWarps(name="consumer"):
-                      cg: barrier[num_consumers] @ CudaCommitGroup
-                      Await(k_produced, cuda_generic_and_async_proxy, ~0)
+                      cg: barrier[num_consumers] @ Sm90_WgmmaCommitGroup
+                      Await(k_produced[kv_idx], cuda_generic_and_async_proxy, 0)
                       for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                         # First MMA writes block QKt to att_block_d.
                         # We don't accumulate across kv-iterations, so use scale_d=0 to reset.
@@ -193,7 +194,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                             dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
                         Await(cg[consumer], cuda_generic_and_async_proxy, 0)
 
-                      Arrive(cuda_in_order) >> k_consumed
+                      Arrive(cuda_in_order) >> k_consumed[kv_idx + RING]
                       for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                         for w in cuda_threads(0, 4, unit=cuda_warp):
                           # Each warp updates its own [16, kv_height] tiles with non-async code.
@@ -250,7 +251,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                       # Second MMA accumulates to O the product of att_block_exp2
                       # (cast to T_type, att_block_a) and the current tile of V.
                       # Both are row major now.
-                      Await(v_produced, cuda_generic_and_async_proxy, ~0)
+                      Await(v_produced[kv_idx], cuda_generic_and_async_proxy, 0)
                       for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                         Fence(wgmma_fence_1, wgmma_fence_2)
                         Sm90_tk_mma_rmem_row(
@@ -261,7 +262,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         )
                         Arrive(wgmma_async) >> cg[consumer]
                         Await(cg[consumer], cuda_generic_and_async_proxy, 0)
-                      Arrive(cuda_in_order) >> v_consumed
+                      Arrive(cuda_in_order) >> v_consumed[kv_idx + RING]
                     # End with CudaWarps(name="consumer")
                   # End causal thing
                 # End for kv_idx
@@ -302,7 +303,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 with CudaWarps(name="consumer"):
                   for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                     with CudaWarps(0, 1):
-                      cg: barrier @ CudaCommitGroup
+                      cg: barrier @ Sm90_TmaCommitGroup
                       for hdim64 in seq(0, Hdim / 64):
                         Sm90_tma_store_2d(
                           o_tm[batch, kv_head, group,
@@ -334,10 +335,10 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     for loop_c in p.find_all("for tma_hdim64 in _:_"):
         p = unroll_loop(p, loop_c)
 
-    sync_check_before = time.time()
-    p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=640)
-    dt = time.time() - sync_check_before
-    print(f"{p.name()}.sync_check: %.0f ms" % (1000 * dt,))
+    # sync_check_before = time.time()
+    # p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=640)
+    # dt = time.time() - sync_check_before
+    # print(f"{p.name()}.sync_check: %.0f ms" % (1000 * dt,))
 
     if cases is not None:
         j_case = {
@@ -356,9 +357,9 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
 
 # attn_64 = make_attn(64, False, cases)
-# attn_128 = make_attn(128, False, cases)
+attn_128 = make_attn(128, False, cases)
 # attn_64_causal = make_attn(64, True, cases)
-attn_128_causal = make_attn(128, True, cases)
+# attn_128_causal = make_attn(128, True, cases)
 
 
 import json
