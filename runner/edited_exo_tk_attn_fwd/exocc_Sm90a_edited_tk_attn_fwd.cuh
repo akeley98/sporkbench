@@ -3,7 +3,8 @@
 #define EDIT_NO_PERSISTENT 1
 #define EDIT_TASK_INDEX_32 0
 #define EDIT_WGMMA_DESC 1
-#define EDIT_MBARRIER 1
+#define EDIT_MBARRIER 0
+#define EDIT_CSE_MBARRIER 0
 
 #if EDIT_MBARRIER
 #if !EDIT_NO_PERSISTENT
@@ -1337,6 +1338,9 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
         wait(kc_mbarrier, ~((kv_idx >> 1) & 1));
       }
 #else
+#if EDIT_CSE_MBARRIER
+      const uint32_t kp_mbarrier = exo_syncState.Arrive0_k_produced(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_1_k_produced) + kv_idx) & 1)), 0);
+#endif
       // Await(k_consumed[((kv_idx + exo_syncState.ring_consumption_4_k_consumed) % 2)], cuda_temporal, 0)
       exo_syncState.Await0_k_consumed(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_4_k_consumed) + kv_idx) & 1)), int(((((exo_syncState.ring_consumption_4_k_consumed) + kv_idx) >> 1) & 1)));
 #endif
@@ -1346,6 +1350,8 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
         , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(exo_deviceArgs.k_tm.C_offsets[0] + exo_task.batch), (exo_deviceArgs.k_tm.C_offsets[1] + exo_task.kv_head), (exo_deviceArgs.k_tm.C_offsets[2] + 128 * kv_idx), exo_deviceArgs.k_tm.C_offsets[3]} }
 #if EDIT_MBARRIER
         , exo_smemU32(&kp_mbarrier)
+#elif EDIT_CSE_MBARRIER
+        , kp_mbarrier
 #else
         , exo_syncState.Arrive0_k_produced(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_1_k_produced) + kv_idx) & 1)), 0)
 #endif
@@ -1357,6 +1363,8 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
         , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(exo_deviceArgs.k_tm.C_offsets[0] + exo_task.batch), (exo_deviceArgs.k_tm.C_offsets[1] + exo_task.kv_head), (exo_deviceArgs.k_tm.C_offsets[2] + 128 * kv_idx), (exo_deviceArgs.k_tm.C_offsets[3] + 64)} }
 #if EDIT_MBARRIER
         , exo_smemU32(&kp_mbarrier)
+#elif EDIT_CSE_MBARRIER
+        , kp_mbarrier
 #else
         , exo_syncState.Arrive0_k_produced(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_1_k_produced) + kv_idx) & 1)), 0)
 #endif
@@ -1377,6 +1385,9 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
         wait(vc_mbarrier, ~((kv_idx >> 1) & 1));
       }
 #else
+#if EDIT_CSE_MBARRIER
+      const uint32_t vp_mbarrier = exo_syncState.Arrive0_v_produced(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_2_v_produced) + kv_idx) & 1)), 0);
+#endif
       // Await(v_consumed[((kv_idx + exo_syncState.ring_consumption_5_v_consumed) % 2)], cuda_temporal, 0)
       exo_syncState.Await0_v_consumed(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_5_v_consumed) + kv_idx) & 1)), int(((((exo_syncState.ring_consumption_5_v_consumed) + kv_idx) >> 1) & 1)));
 #endif
@@ -1386,6 +1397,8 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
         , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(exo_deviceArgs.v_tm.C_offsets[0] + exo_task.batch), (exo_deviceArgs.v_tm.C_offsets[1] + exo_task.kv_head), (exo_deviceArgs.v_tm.C_offsets[2] + 128 * kv_idx), exo_deviceArgs.v_tm.C_offsets[3]} }
 #if EDIT_MBARRIER
         , exo_smemU32(&vp_mbarrier)
+#elif EDIT_CSE_MBARRIER
+        , vp_mbarrier
 #else
         , exo_syncState.Arrive0_v_produced(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_2_v_produced) + kv_idx) & 1)), 0)
 #endif
@@ -1397,6 +1410,8 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
         , (exo_win_2bf16_Sm90_tensorMap_128_1_1_128_64) { {(exo_deviceArgs.v_tm.C_offsets[0] + exo_task.batch), (exo_deviceArgs.v_tm.C_offsets[1] + exo_task.kv_head), (exo_deviceArgs.v_tm.C_offsets[2] + 128 * kv_idx), (exo_deviceArgs.v_tm.C_offsets[3] + 64)} }
 #if EDIT_MBARRIER
         , exo_smemU32(&vp_mbarrier)
+#elif EDIT_CSE_MBARRIER
+        , vp_mbarrier
 #else
         , exo_syncState.Arrive0_v_produced(exo_smem, exo_excutLog, int((((exo_syncState.ring_consumption_2_v_produced) + kv_idx) & 1)), 0)
 #endif
