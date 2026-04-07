@@ -5,6 +5,7 @@
 #define EDIT_WGMMA_DESC 1
 #define EDIT_MBARRIER 0
 #define EDIT_CSE_MBARRIER 0
+#define EDIT_NO_PRE_ARRIVE 0  /* broken */
 
 #if EDIT_MBARRIER
 #if !EDIT_NO_PERSISTENT
@@ -1080,7 +1081,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
       exo_excutLog.log_action(EXO_EXCUT_STR_ID(mbarrier_init_shared_cta_b64), 0, __LINE__);
       exo_excutLog.log_u32_arg(exo_smemU32(exo_smem + exo_smemOffset4_v_consumed + 0));
       exo_excutLog.log_u32_arg(static_cast<uint32_t>(384));
-#if !EDIT_MBARRIER
+#if (!EDIT_MBARRIER && !EDIT_NO_PRE_ARRIVE)
       asm volatile(
         "mbarrier.arrive.shared::cta.b64 _, [%0], 384;"
           :
@@ -1098,7 +1099,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
       exo_excutLog.log_action(EXO_EXCUT_STR_ID(mbarrier_init_shared_cta_b64), 0, __LINE__);
       exo_excutLog.log_u32_arg(exo_smemU32(exo_smem + exo_smemOffset4_v_consumed + 8));
       exo_excutLog.log_u32_arg(static_cast<uint32_t>(384));
-#if !EDIT_MBARRIER
+#if (!EDIT_MBARRIER && !EDIT_NO_PRE_ARRIVE)
       asm volatile(
         "mbarrier.arrive.shared::cta.b64 _, [%0], 384;"
           :
@@ -1116,7 +1117,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
       exo_excutLog.log_action(EXO_EXCUT_STR_ID(mbarrier_init_shared_cta_b64), 0, __LINE__);
       exo_excutLog.log_u32_arg(exo_smemU32(exo_smem + exo_smemOffset5_k_consumed + 0));
       exo_excutLog.log_u32_arg(static_cast<uint32_t>(384));
-#if !EDIT_MBARRIER
+#if (!EDIT_MBARRIER && !EDIT_NO_PRE_ARRIVE)
       asm volatile(
         "mbarrier.arrive.shared::cta.b64 _, [%0], 384;"
           :
@@ -1134,7 +1135,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
       exo_excutLog.log_action(EXO_EXCUT_STR_ID(mbarrier_init_shared_cta_b64), 0, __LINE__);
       exo_excutLog.log_u32_arg(exo_smemU32(exo_smem + exo_smemOffset5_k_consumed + 8));
       exo_excutLog.log_u32_arg(static_cast<uint32_t>(384));
-#if !EDIT_MBARRIER
+#if (!EDIT_MBARRIER && !EDIT_NO_PRE_ARRIVE)
       asm volatile(
         "mbarrier.arrive.shared::cta.b64 _, [%0], 384;"
           :
@@ -1152,7 +1153,7 @@ exo_CudaInline_exocc_Sm90a_edited_tk_attn_fwd::exo_Cuda0_edited_exo_tk_attn_fwd_
       exo_excutLog.log_action(EXO_EXCUT_STR_ID(mbarrier_init_shared_cta_b64), 0, __LINE__);
       exo_excutLog.log_u32_arg(exo_smemU32(exo_smem + exo_smemOffset6_q_consumed + 0));
       exo_excutLog.log_u32_arg(static_cast<uint32_t>(384));
-#if !EDIT_MBARRIER
+#if (!EDIT_MBARRIER && !EDIT_NO_PRE_ARRIVE)
       asm volatile(
         "mbarrier.arrive.shared::cta.b64 _, [%0], 384;"
           :
