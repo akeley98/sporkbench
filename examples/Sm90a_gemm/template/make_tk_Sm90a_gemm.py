@@ -27,6 +27,9 @@ from typing import List
 from .Sm90a_gemm_pre_config import Sm90aGemmConfig
 
 
+Sm90_multicast_copy_tensor_to_smem_swizzled_2f32 = Sm90_tma_load_multicast_2d.partial(dst=f32, src=f32)
+
+
 def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: List[dict]):
     assert isinstance(config.smem_M, int), "Need to import Sm90a_gemm_pre_config first and set config variables"
     assert isinstance(config.smem_N, int), "Need to import Sm90a_gemm_pre_config first and set config variables"
@@ -108,7 +111,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                     # Must be declared early to avoid aliasing with A_smem, B_smem.
                     ping_C: f32[ncta_M, ncta_N, tile_N, tile_M] @ CudaSmemLinear
 
-                    D_rmem : f32[ncta_M, ncta_N, 2, 4, wg_M/64, 16, wg_N] @ Sm90_TkRmemTileD(wg_N)
+                    D_rmem: f32[ncta_M, ncta_N, 2, 4, wg_M/64, 16, wg_N] @ Sm90_TkRmemTileD(wg_N)
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                         for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
@@ -117,12 +120,14 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                                     for ms in seq(0, wg_M / 64, pragma_unroll=0):
                                         Sm90_tk_zero_scale_d(D_rmem[cta_m,cta_n,wg_m,:,ms,:,:], N=wg_N, D=f32)
 
-                    raw : barrier[ncta_M, ncta_N, P_DEPTH] @ CudaMbarrier
-                    war : barrier(raw)[ncta_M, ncta_N, P_DEPTH] @ CudaMbarrier
-                    cg : barrier[ncta_M, ncta_N, 2] @ CudaCommitGroup
+                    war: barrier[ncta_M, ncta_N, P_DEPTH, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
+                        ] @ CudaMbarrierPreArrive(RING - 1)
+                    raw: barrier[ncta_M, ncta_N, P_DEPTH, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
+                        ].ring_guarded_by(war) @ CudaMbarrierPreArrive(0)
+                    cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
-                    A_smem : f32[ncta_M, ncta_N, P_DEPTH, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
-                    B_smem : f32[ncta_M, ncta_N, P_DEPTH, RING, tile_N, smem_K] @ Sm90_SmemSwizzled(128)
+                    A_smem: f32[ncta_M, ncta_N, P_DEPTH, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
+                    B_smem: f32[ncta_M, ncta_N, P_DEPTH, RING, tile_N, smem_K] @ Sm90_SmemSwizzled(128)
 
                     # This loop should be cut at 1
                     for iter_k in seq(0, (cluster_K + smem_K - 1) / smem_K):
@@ -131,7 +136,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                           for pm in cuda_threads(0, P_DEPTH, unit=cuda_warp):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
-                                    Await(war[cta_m,cta_n,pm], cuda_temporal, ~(RING-1))
+                                    Await(war[cta_m,cta_n,pm, iter_k], cuda_temporal, 0)
                                 Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
                                     A_smem[cta_m,:,pm,iter_k % RING,:,:],
                                     A_tensorMap[
@@ -142,7 +147,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                                         iter_k * smem_K:
                                         iter_k * smem_K + smem_K],
                                     ncta=ncta_N, cta_stride=1, size0=tile_M, size1=smem_K, smem_box=smem_box_A
-                                ) >> raw[cta_m,:,pm]
+                                ) >> raw[cta_m,:,pm, iter_k]
                             for cta_n in cuda_threads(0, ncta_N, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N)):
                                 Sm90_multicast_copy_tensor_to_smem_swizzled_2f32(
                                     B_smem[:,cta_n,pm,iter_k % RING,:,:],
@@ -154,15 +159,15 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                                         iter_k * smem_K:
                                         iter_k * smem_K + smem_K],
                                     ncta=ncta_M, cta_stride=ncta_N, size0=tile_N, size1=smem_K, smem_box=smem_box_B
-                                ) >> raw[:,cta_n,pm]
+                                ) >> raw[:,cta_n,pm, iter_k]
                                 for cta_m in cuda_threads(0, ncta_M, unit=cuda_cta_in_cluster):
-                                    Arrive(cuda_temporal) >> raw[cta_m,:,pm] >> raw[:,cta_n,pm]
+                                    Arrive(cuda_temporal) >> raw[cta_m,:,pm, iter_k] >> raw[:,cta_n,pm, iter_k]
 
                         with CudaWarps(name="consumer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
                                     for pm in cuda_threads(0, P_DEPTH, unit=(2 // P_DEPTH) * cuda_warpgroup):
-                                        Await(raw[cta_m,cta_n,pm], cuda_generic_and_async_proxy, ~0)
+                                        Await(raw[cta_m,cta_n,pm, iter_k], cuda_generic_and_async_proxy, 0)
 
                                     for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                         Fence(wgmma_fence_1, wgmma_fence_2)
@@ -178,7 +183,8 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                                             Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
 
                                     for pm in cuda_threads(0, P_DEPTH, unit=(2 // P_DEPTH) * cuda_warpgroup):
-                                        Arrive(cuda_in_order) >> war[cta_m,:,pm] >> war[:,cta_n,pm]
+                                        Arrive(cuda_in_order
+                                        ) >> war[cta_m,:,pm, iter_k+RING-1] >> war[:,cta_n,pm, iter_k+RING-1]
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                         for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
@@ -363,7 +369,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
 
     # Timed sync check
     t = time.time()
-    if ping_pong and tma_to_gmem:
+    if True:
         print("NO SYNC CHECK: %s" % (p.name(),))
         # p._hack_no_smem_free_check = True
     else:
@@ -452,7 +458,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
             for task_k in cuda_tasks(0, K_split):
               for task_n in cuda_tasks(0, (N + cluster_N - 1) / cluster_N):
                 for task_m in cuda_tasks(0, (M + cluster_M - 1) / cluster_M):
-                    D_rmem : D_type[ncta_M, ncta_N, 2, 4, wg_M/64, 16, wg_N] @ Sm90_TkRmemTileD(wg_N)
+                    D_rmem: D_type[ncta_M, ncta_N, 2, 4, wg_M/64, 16, wg_N] @ Sm90_TkRmemTileD(wg_N)
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                         for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
@@ -461,19 +467,21 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                     for ms in seq(0, wg_M / 64, pragma_unroll=0):
                                         Sm90_tk_zero_scale_d(D_rmem[cta_m,cta_n,wg_m,:,ms,:,:], N=wg_N, D=f32)
 
-                    raw : barrier[ncta_M, ncta_N] @ CudaMbarrier
-                    war : barrier(raw)[ncta_M, ncta_N] @ CudaMbarrier
-                    cg : barrier[ncta_M, ncta_N, 2] @ CudaCommitGroup
+                    war: barrier[ncta_M, ncta_N, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
+                        ] @ CudaMbarrierPreArrive(RING - 1)
+                    raw: barrier[ncta_M, ncta_N, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
+                        ].ring_guarded_by(war) @ CudaMbarrierPreArrive(0)
+                    cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
-                    A_smem : A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
-                    B_smem : B_type[ncta_M, ncta_N, RING, tile_N, smem_K] @ Sm90_SmemSwizzled(128)
+                    A_smem: A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
+                    B_smem: B_type[ncta_M, ncta_N, RING, tile_N, smem_K] @ Sm90_SmemSwizzled(128)
 
                     # This loop should be cut at 1.
                     for iter_k in seq(0, (cluster_K + smem_K - 1) / smem_K):
                         with CudaWarps(0, 1, name="producer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
-                                    Await(war[cta_m,cta_n], cuda_temporal, ~(RING-1))
+                                    Await(war[cta_m,cta_n,iter_k], cuda_temporal, 0)
                                 Sm90_tma_load_multicast_2d(
                                     A_smem[cta_m,:,iter_k % RING,:,:],
                                     A_tensorMap[
@@ -485,7 +493,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                         iter_k * smem_K + smem_K],
                                     ncta=ncta_N, cta_stride=1, size0=tile_M, size1=smem_K,
                                     smem_box=smem_box_A, dst=A_type, src=A_type,
-                                ) >> raw[cta_m,:]
+                                ) >> raw[cta_m,:,iter_k]
                             for cta_n in cuda_threads(0, ncta_N, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N)):
                                 Sm90_tma_load_multicast_2d(
                                     B_smem[:,cta_n,iter_k % RING,:,:],
@@ -498,13 +506,13 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                         iter_k * smem_K + smem_K],
                                     ncta=ncta_M, cta_stride=ncta_N, size0=tile_N, size1=smem_K,
                                     smem_box=smem_box_B, dst=B_type, src=B_type,
-                                ) >> raw[:,cta_n]
+                                ) >> raw[:,cta_n,iter_k]
                                 for cta_m in cuda_threads(0, ncta_M, unit=cuda_cta_in_cluster):
-                                    Arrive(cuda_temporal) >> raw[cta_m,:] >> raw[:,cta_n]
+                                    Arrive(cuda_temporal) >> raw[cta_m,:,iter_k] >> raw[:,cta_n,iter_k]
                         with CudaWarps(name="consumer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
-                                    Await(raw[cta_m,cta_n], cuda_generic_and_async_proxy, ~0)
+                                    Await(raw[cta_m,cta_n,iter_k], cuda_generic_and_async_proxy, 0)
 
                                     for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                         Fence(wgmma_fence_1, wgmma_fence_2)
@@ -519,7 +527,8 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                         if iter_k >= 1:
                                             Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
 
-                                    Arrive(cuda_in_order) >> war[cta_m,:] >> war[:,cta_n]
+                                    Arrive(cuda_in_order
+                                    ) >> war[cta_m,:, iter_k+RING-1] >> war[:,cta_n, iter_k+RING-1]
                     # end for iter_k
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -572,11 +581,13 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
 
     # Timed sync check
     t = time.time()
-    if True:
+    if False:
         K_split = 2 if enable_split_k else 1
         p.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
-    dt = time.time() - t
-    print("%.3f s, %s" % (dt, p.name()))
+        dt = time.time() - t
+        print("%.3f s, %s" % (dt, p.name()))
+    else:
+        print("No sync check: %s" % (p.name(), ))
 
     # sporkbench cases
     if cases is not None:
@@ -672,7 +683,7 @@ def make_Sm90a_generic_gemm_Brow(
             for task_k in cuda_tasks(0, K_split):
               for task_n in cuda_tasks(0, (N + cluster_N - 1) / cluster_N):
                 for task_m in cuda_tasks(0, (M + cluster_M - 1) / cluster_M):
-                    D_rmem : D_type[ncta_M, ncta_N, 2, 4, wg_M/64, 16, wg_N] @ Sm90_TkRmemTileD(wg_N)
+                    D_rmem: D_type[ncta_M, ncta_N, 2, 4, wg_M/64, 16, wg_N] @ Sm90_TkRmemTileD(wg_N)
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                         for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
@@ -681,12 +692,14 @@ def make_Sm90a_generic_gemm_Brow(
                                     for ms in seq(0, wg_M / 64, pragma_unroll=0):
                                         Sm90_tk_zero_scale_d(D_rmem[cta_m,cta_n,wg_m,:,ms,:,:], N=wg_N, D=D_type)
 
-                    raw : barrier[ncta_M, ncta_N] @ CudaMbarrier
-                    war : barrier(raw)[ncta_M, ncta_N] @ CudaMbarrier
-                    cg : barrier[ncta_M, ncta_N, 2] @ CudaCommitGroup
+                    war: barrier[ncta_M, ncta_N, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
+                        ] @ CudaMbarrierPreArrive(RING - 1)
+                    raw: barrier[ncta_M, ncta_N, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
+                        ].ring_guarded_by(war) @ CudaMbarrierPreArrive(0)
+                    cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
-                    A_smem : A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
-                    B_smem : B_type[ncta_M, ncta_N, RING, tile_N / 64, smem_K, 64] @ Sm90_SmemSwizzled(128)
+                    A_smem: A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
+                    B_smem: B_type[ncta_M, ncta_N, RING, tile_N / 64, smem_K, 64] @ Sm90_SmemSwizzled(128)
 
                     # Distributed dims: [CTA m, CTA n, 2 warpgroups, 4 warps]
                     # Each warp holds (wg_M/64)-many [16, smem_K]-sized tiles.
@@ -697,7 +710,7 @@ def make_Sm90a_generic_gemm_Brow(
                         with CudaWarps(0, 1, name="producer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
-                                    Await(war[cta_m,cta_n], cuda_temporal, ~(RING-1))
+                                    Await(war[cta_m,cta_n,iter_k], cuda_temporal, 0)
                                 Sm90_tma_load_multicast_2d(
                                     A_smem[cta_m,:,iter_k % RING,:,:],
                                     A_tensorMap[
@@ -709,7 +722,7 @@ def make_Sm90a_generic_gemm_Brow(
                                         iter_k * smem_K + smem_K],
                                     ncta=ncta_N, cta_stride=1, size0=tile_M, size1=smem_K,
                                     smem_box=smem_box_A, dst=A_type, src=A_type,
-                                ) >> raw[cta_m,:]
+                                ) >> raw[cta_m,:,iter_k]
                             for cta_n in cuda_threads(0, ncta_N, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N)):
                                 for sn_tma in seq(0, smem_N / 64):  # TODO remove need to unroll this loop.
                                     Sm90_tma_load_multicast_2d(
@@ -723,14 +736,14 @@ def make_Sm90a_generic_gemm_Brow(
                                             (ncta_N*task_n+cta_n) * smem_N + sn_tma * 64 + 64],
                                         ncta=ncta_M, cta_stride=ncta_N, size0=smem_K, size1=64,
                                         smem_box=smem_box_B, dst=B_type, src=B_type,
-                                    ) >> raw[:,cta_n]
+                                    ) >> raw[:,cta_n,iter_k]
                                 for cta_m in cuda_threads(0, ncta_M, unit=cuda_cta_in_cluster):
-                                    Arrive(cuda_temporal) >> raw[cta_m,:] >> raw[:,cta_n]
+                                    Arrive(cuda_temporal) >> raw[cta_m,:,iter_k] >> raw[:,cta_n,iter_k]
                         # End CudaWarps(0, 1, name="producer")
                         with CudaWarps(name="consumer"):
                             for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
-                                    Await(raw[cta_m,cta_n], cuda_generic_and_async_proxy, ~0)
+                                    Await(raw[cta_m,cta_n,iter_k], cuda_generic_and_async_proxy, 0)
 
                                     if A_is_rmem:
                                         # A in RMEM case
@@ -775,7 +788,8 @@ def make_Sm90a_generic_gemm_Brow(
                                                 Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
                                         # End A in SMEM case
 
-                                    Arrive(cuda_in_order) >> war[cta_m,:] >> war[:,cta_n]
+                                    Arrive(cuda_in_order
+                                    ) >> war[cta_m,:, iter_k+RING-1] >> war[:,cta_n, iter_k+RING-1]
                         # End CudaWarps(name="consumer")
                     # end for iter_k
 
@@ -829,11 +843,13 @@ def make_Sm90a_generic_gemm_Brow(
 
     # Timed sync check
     t = time.time()
-    if True:
+    if False:
         K_split = 2 if enable_split_k else 1
         p.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
-    dt = time.time() - t
-    print("%.3f s, %s" % (dt, p.name()))
+        dt = time.time() - t
+        print("%.3f s, %s" % (dt, p.name()))
+    else:
+        print("No sync check: %s" % (p.name(), ))
 
     A_major = "col" if A_mode == "col" else "row"
 
