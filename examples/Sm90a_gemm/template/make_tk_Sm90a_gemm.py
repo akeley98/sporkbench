@@ -369,7 +369,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
 
     # Timed sync check
     t = time.time()
-    if True:
+    if False:
         print("NO SYNC CHECK: %s" % (p.name(),))
         # p._hack_no_smem_free_check = True
     else:
@@ -581,7 +581,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
 
     # Timed sync check
     t = time.time()
-    if False:
+    if True:
         K_split = 2 if enable_split_k else 1
         p.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
         dt = time.time() - t
@@ -843,7 +843,7 @@ def make_Sm90a_generic_gemm_Brow(
 
     # Timed sync check
     t = time.time()
-    if False:
+    if True:
         K_split = 2 if enable_split_k else 1
         p.sync_check(L=2, M=500, N=800, cluster_K=240, K_split=K_split)
         dt = time.time() - t
