@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.cuda import *
@@ -14,7 +16,10 @@ K_divisor = 128
 
 
 def add_case(p):
+    t = time.time()
     p.sync_check(L=1, M=256, N=256, K=512)
+    dt = time.time() - t
+    print("%.3f s, %s" % (dt, p.name()))
     cases.append({
         "algorithm": "gemm",
         "proc": p.name(),

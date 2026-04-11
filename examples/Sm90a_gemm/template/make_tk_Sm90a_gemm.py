@@ -123,7 +123,7 @@ def make_Sm90a_gemm(config: Sm90aGemmConfig, ncta_M: int, ncta_N: int, cases: Li
                     war: barrier[ncta_M, ncta_N, P_DEPTH, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
                         ] @ CudaMbarrierPreArrive(RING - 1)
                     raw: barrier[ncta_M, ncta_N, P_DEPTH, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
-                        ].ring_guarded_by(war) @ CudaMbarrierPreArrive(0)
+                        ] @ CudaMbarrierPreArrive(0)
                     cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
                     A_smem: f32[ncta_M, ncta_N, P_DEPTH, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
@@ -470,7 +470,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                     war: barrier[ncta_M, ncta_N, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
                         ] @ CudaMbarrierPreArrive(RING - 1)
                     raw: barrier[ncta_M, ncta_N, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
-                        ].ring_guarded_by(war) @ CudaMbarrierPreArrive(0)
+                        ] @ CudaMbarrierPreArrive(0)
                     cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
                     A_smem: A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
@@ -695,7 +695,7 @@ def make_Sm90a_generic_gemm_Brow(
                     war: barrier[ncta_M, ncta_N, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
                         ] @ CudaMbarrierPreArrive(RING - 1)
                     raw: barrier[ncta_M, ncta_N, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
-                        ].ring_guarded_by(war) @ CudaMbarrierPreArrive(0)
+                        ] @ CudaMbarrierPreArrive(0)
                     cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
                     A_smem: A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
