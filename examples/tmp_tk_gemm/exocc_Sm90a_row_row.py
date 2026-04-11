@@ -17,8 +17,8 @@ from typing import List
 
 cases = []
 
-gemm_m1n1_f32_bf16_rmem_row = make_Sm90a_generic_gemm_Brow(1, 1, f32, bf16, bf16, f32, "rmem", cases)
-gemm_m2n1_f32_bf16_rmem_row = make_Sm90a_generic_gemm_Brow(2, 1, f32, bf16, bf16, f32, "rmem", cases)
+# gemm_m1n1_f32_bf16_rmem_row = make_Sm90a_generic_gemm_Brow(1, 1, f32, bf16, bf16, f32, "rmem", cases)
+# gemm_m2n1_f32_bf16_rmem_row = make_Sm90a_generic_gemm_Brow(2, 1, f32, bf16, bf16, f32, "rmem", cases)
 
 gemm_m1n1_f32_f16 = make_Sm90a_generic_gemm_Brow(1, 1, f32, f16, f16, f32, "row", cases)
 # gemm_m1n2_f32_f16 = make_Sm90a_generic_gemm_Brow(1, 2, f32, f16, f16, f32, "row", cases)
@@ -27,12 +27,12 @@ gemm_m1n1_f32_f16 = make_Sm90a_generic_gemm_Brow(1, 1, f32, f16, f16, f32, "row"
 
 gemm_m1n1_f32_bf16 = make_Sm90a_generic_gemm_Brow(1, 1, f32, bf16, bf16, f32, "row", cases)
 # gemm_m1n2_f32_bf16 = make_Sm90a_generic_gemm_Brow(1, 2, f32, bf16, bf16, f32, "row", cases)
-gemm_m2n1_f32_bf16 = make_Sm90a_generic_gemm_Brow(2, 1, f32, bf16, bf16, f32, "row", cases)
+# gemm_m2n1_f32_bf16 = make_Sm90a_generic_gemm_Brow(2, 1, f32, bf16, bf16, f32, "row", cases)
 # gemm_m2n2_f32_bf16 = make_Sm90a_generic_gemm_Brow(2, 2, f32, bf16, bf16, f32, "row", cases)
 
 gemm_m1n1_f16_f16 = make_Sm90a_generic_gemm_Brow(1, 1, f16, f16, f16, f16, "row", cases)
-gemm_m1n2_f16_f16 = make_Sm90a_generic_gemm_Brow(1, 2, f16, f16, f16, f16, "row", cases)
-gemm_m2n1_f16_f16 = make_Sm90a_generic_gemm_Brow(2, 1, f16, f16, f16, f16, "row", cases)
+# gemm_m1n2_f16_f16 = make_Sm90a_generic_gemm_Brow(1, 2, f16, f16, f16, f16, "row", cases)
+# gemm_m2n1_f16_f16 = make_Sm90a_generic_gemm_Brow(2, 1, f16, f16, f16, f16, "row", cases)
 # gemm_m2n2_f16_f16 = make_Sm90a_generic_gemm_Brow(2, 2, f16, f16, f16, f16, "row", cases)
 
 

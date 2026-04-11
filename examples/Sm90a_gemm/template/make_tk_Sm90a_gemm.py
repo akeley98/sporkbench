@@ -403,7 +403,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
 
     assert D_type == f32, f"{D_type} needs to be f32 for now"
     smem_M = 128
-    smem_N = 256
+    smem_N = 192
     smem_K = 128 * 8 // A_type.bits
     assert A_type.bits == B_type.bits, f"{A_type}, {B_type}"
     wg_M = smem_M // 2
@@ -412,7 +412,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
     cluster_N = smem_N * ncta_N
     tile_M = smem_M
     tile_N = smem_N
-    RING = 4
+    RING = 3
 
     # (batch dim, MN smem, k_task, K smem)
     smem_box_A = (1, tile_M // ncta_N, 1, smem_K)
@@ -467,14 +467,24 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                     for ms in seq(0, wg_M / 64, pragma_unroll=0):
                                         Sm90_tk_zero_scale_d(D_rmem[cta_m,cta_n,wg_m,:,ms,:,:], N=wg_N, D=f32)
 
-                    war: barrier[ncta_M, ncta_N, (RING - 1 + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
-                        ] @ CudaMbarrierPreArrive(RING - 1)
+                    war: barrier[ncta_M, ncta_N, (RING + (cluster_K + smem_K - 1) / smem_K) @ ring_buffer_by(RING),
+                        ] @ CudaMbarrierPreArrive(RING)
                     raw: barrier[ncta_M, ncta_N, (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
                         ] @ CudaMbarrierPreArrive(0)
                     cg: barrier[ncta_M, ncta_N, 2] @ Sm90_WgmmaCommitGroup
 
-                    A_smem: A_type[ncta_M, ncta_N, RING, tile_M, smem_K] @ Sm90_SmemSwizzled(128)
-                    B_smem: B_type[ncta_M, ncta_N, RING, tile_N, smem_K] @ Sm90_SmemSwizzled(128)
+                    A_smem: A_type[
+                        ncta_M,
+                        ncta_N,
+                        (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
+                        tile_M,
+                        smem_K].ring_guarded_by(war) @ Sm90_SmemSwizzled(128)
+                    B_smem: B_type[
+                        ncta_M,
+                        ncta_N,
+                        (cluster_K + smem_K - 1) / smem_K @ ring_buffer_by(RING),
+                        tile_N,
+                        smem_K].ring_guarded_by(war) @ Sm90_SmemSwizzled(128)
 
                     # This loop should be cut at 1.
                     for iter_k in seq(0, (cluster_K + smem_K - 1) / smem_K):
@@ -483,7 +493,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                 for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
                                     Await(war[cta_m,cta_n,iter_k], cuda_temporal, 0)
                                 Sm90_tma_load_multicast_2d(
-                                    A_smem[cta_m,:,iter_k % RING,:,:],
+                                    A_smem[cta_m,:,iter_k,:,:],
                                     A_tensorMap[
                                         batch,
                                         (ncta_M*task_m + cta_m) * smem_M:
@@ -496,7 +506,7 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                 ) >> raw[cta_m,:,iter_k]
                             for cta_n in cuda_threads(0, ncta_N, unit=ncta_M * cuda_cta_in_cluster_strided(ncta_N)):
                                 Sm90_tma_load_multicast_2d(
-                                    B_smem[:,cta_n,iter_k % RING,:,:],
+                                    B_smem[:,cta_n,iter_k,:,:],
                                     B_tensorMap[
                                         batch,
                                         (ncta_N*task_n+cta_n) * smem_N:
@@ -519,16 +529,18 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                                         for ms in seq(0, wg_M / 64, pragma_unroll=0):
                                             Sm90_tk_mma_row_col(
                                                 D_rmem[cta_m, cta_n, wg_m, :, ms, :, :],
-                                                A_smem[cta_m, cta_n, iter_k % RING, (wg_m*wg_M): ((wg_m+1)*wg_M), :],
-                                                B_smem[cta_m, cta_n, iter_k % RING, :, :],
+                                                A_smem[cta_m, cta_n, iter_k, (wg_m*wg_M): ((wg_m+1)*wg_M), :],
+                                                B_smem[cta_m, cta_n, iter_k, :, :],
                                                 D=D_type, A=A_type, B=B_type, N=wg_N, K=smem_K,
                                             )
                                         Arrive(wgmma_async) >> cg[cta_m,cta_n,wg_m]
-                                        if iter_k >= 1:
+                            if iter_k >= 1:
+                                for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
+                                    for cta_n in cuda_threads(0, ncta_N, unit=cuda_cta_in_cluster):
+                                        for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                             Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 1)
-
-                                    Arrive(cuda_in_order
-                                    ) >> war[cta_m,:, iter_k+RING-1] >> war[:,cta_n, iter_k+RING-1]
+                                        Arrive(cuda_in_order
+                                        ) >> war[cta_m,:, iter_k+RING-1] >> war[:,cta_n, iter_k+RING-1]
                     # end for iter_k
 
                     for cta_m in cuda_threads(0, ncta_M, unit=ncta_N * cuda_cta_in_cluster):
@@ -536,6 +548,9 @@ def make_Sm90a_generic_gemm(ncta_M: int, ncta_N: int, D_type, A_type, B_type, ca
                             with CudaWarps(name="consumer"):
                                 for wg_m in cuda_threads(0, 2, unit=cuda_warpgroup):
                                     Await(cg[cta_m,cta_n,wg_m], cuda_in_order, 0)
+                                Arrive(cuda_in_order) \
+                                    >> war[cta_m, :, (cluster_K + smem_K - 1) / smem_K + RING - 1] \
+                                    >> war[:, cta_n, (cluster_K + smem_K - 1) / smem_K + RING - 1]
 
                     Fence(cuda_in_order, cuda_in_order)
 
