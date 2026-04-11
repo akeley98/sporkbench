@@ -89,7 +89,6 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 with CudaWarps(0, 1, name="producer"):
                   # Load the Q tile for each consumer warpgroup.
                   Await(q_consumed[0], cuda_temporal, 0)
-                  # TODO I should not have to unroll these tma_* loops.
                   for tma_consumer in seq(0, num_consumers):
                     for tma_hdim64 in seq(0, Hdim/64):
                       Sm90_tma_load_2d(
@@ -142,7 +141,6 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                     with CudaWarps(0, 1, name="producer"):
                       # Load K tile for iteration, shared by all consumers.
                       Await(k_consumed[kv_idx], cuda_temporal, 0)
-                      # TODO I should not have to unroll these tma_* loops.
                       for tma_hdim64 in seq(0, Hdim/64):
                         Sm90_tma_load_2d(
                           k_smem[kv_idx % RING, tma_hdim64, :, :],
@@ -330,10 +328,6 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
     p = simplify(p)
     p = rename(p, f"exo_tk_attn_fwd_Hdim{Hdim}" + "_causal" * causal)
-    for loop_c in p.find_all("for tma_consumer in _:_"):
-        p = unroll_loop(p, loop_c)
-    for loop_c in p.find_all("for tma_hdim64 in _:_"):
-        p = unroll_loop(p, loop_c)
 
     sync_check_before = time.time()
     p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=640)
