@@ -51,15 +51,15 @@ def gemv_warp_coop_8_smem(
                 tmp: f32[2, 2, 2] @ CudaRmem
                 for k2 in cuda_threads(0, 2, unit=2 * cuda_threads_strided(2, 4)):
                     for k1 in cuda_threads(0, 2, unit=2 * cuda_threads_strided(1, 4)):
-                        cuda_shfl_xor_sync_1f32_sum(
+                        cuda_shfl_xor_sync_sum_1f32(
                             tmp[:, k2, k1], partial_sum[:, k2, k1], laneMask=4)
                 for k4 in cuda_threads(0, 2, unit=4 * cuda_thread):
                     for k1 in cuda_threads(0, 2, unit=2 * cuda_threads_strided(1, 2)):
-                        cuda_shfl_xor_sync_1f32_sum(
+                        cuda_shfl_xor_sync_sum_1f32(
                             partial_sum[k4, :, k1], tmp[k4, :, k1], laneMask=2)
                 for k4 in cuda_threads(0, 2, unit=4 * cuda_thread):
                     for k2 in cuda_threads(0, 2, unit=2 * cuda_thread):
-                        cuda_shfl_xor_sync_1f32_sum(
+                        cuda_shfl_xor_sync_sum_1f32(
                             tmp[k4, k2, :], partial_sum[k4, k2, :], laneMask=1)
                         # Nominate one thread to write the output.
                         # This is written strangely; we can't access tmp[0, 0, 0]
@@ -119,15 +119,15 @@ def gemv_warp_coop_8(
                 tmp: f32[2, 2, 2] @ CudaRmem
                 for k2 in cuda_threads(0, 2, unit=2 * cuda_threads_strided(2, 4)):
                     for k1 in cuda_threads(0, 2, unit=2 * cuda_threads_strided(1, 4)):
-                        cuda_shfl_xor_sync_1f32_sum(
+                        cuda_shfl_xor_sync_sum_1f32(
                             tmp[:, k2, k1], partial_sum[:, k2, k1], laneMask=4)
                 for k4 in cuda_threads(0, 2, unit=4 * cuda_thread):
                     for k1 in cuda_threads(0, 2, unit=2 * cuda_threads_strided(1, 2)):
-                        cuda_shfl_xor_sync_1f32_sum(
+                        cuda_shfl_xor_sync_sum_1f32(
                             partial_sum[k4, :, k1], tmp[k4, :, k1], laneMask=2)
                 for k4 in cuda_threads(0, 2, unit=4 * cuda_thread):
                     for k2 in cuda_threads(0, 2, unit=2 * cuda_thread):
-                        cuda_shfl_xor_sync_1f32_sum(
+                        cuda_shfl_xor_sync_sum_1f32(
                             tmp[k4, k2, :], partial_sum[k4, k2, :], laneMask=1)
                         # Nominate one thread to write the output.
                         # This is written strangely; we can't access tmp[0, 0, 0]
