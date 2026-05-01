@@ -41,16 +41,18 @@ static void run_pldi_Sm80_edited_exo_gemm(cublasHandle_t, GemmSize size, const _
 template <typename Ctype, typename ABtype>
 std::vector<GemmCaseT<Ctype, ABtype>> make_builtin_cases_gemm(const GemmCaseT<Ctype, ABtype>&)
 {
+    using ComputeType = std::conditional_t<std::is_same_v<exo_bf16, Ctype>, float, Ctype>;
+
     static_assert(all_row_major_flags == 7, "Update GemmEx case list");
     std::vector<GemmCaseT<Ctype, ABtype>> result {
-      GemmEx<0, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<1, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<2, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<3, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<4, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<5, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<6, Ctype, ABtype, Ctype>::make_case(),
-      GemmEx<7, Ctype, ABtype, Ctype>::make_case(),
+      GemmEx<0, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<1, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<2, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<3, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<4, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<5, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<6, Ctype, ABtype, ComputeType>::make_case(),
+      GemmEx<7, Ctype, ABtype, ComputeType>::make_case(),
     };
 
     if constexpr (std::is_same_v<ABtype, float> || std::is_same_v<ABtype, __half>) {

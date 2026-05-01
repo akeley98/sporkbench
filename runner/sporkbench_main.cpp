@@ -840,8 +840,8 @@ int Main(int argc, char** argv)
     typed_gemm_helper(GemmCase_f32_f32{});
     typed_gemm_helper(GemmCase_f32_f16{});
     typed_gemm_helper(GemmCase_f16_f16{});
-    typed_gemm_helper(GemmCase_f32_bf16{});
     typed_gemm_helper(GemmCase_bf16_bf16{});
+    typed_gemm_helper(GemmCase_f32_bf16{});
     typed_gemm_helper(GemmCase_f32_e4m3{});
     typed_gemm_helper(GemmCase_f32_e5m2{});
 

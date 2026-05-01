@@ -455,14 +455,15 @@ void init_test_data_impl(
     }
 
     // K-major inputs required to initialize expected data.
+    using ComputeType = std::conditional_t<std::is_same_v<exo_bf16, Ctype>, float, Ctype>;
     assert(resources.A_row_major);
     assert(resources.B_col_major);
     if (resources.C_expected_row_major) {
-        using G = GemmEx<A_row_major_flag | C_row_major_flag, Ctype, ABtype, Ctype>;
+        using G = GemmEx<A_row_major_flag | C_row_major_flag, Ctype, ABtype, ComputeType>;
         G::run(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected_row_major);
     }
     if (resources.C_expected_col_major) {
-        using G = GemmEx<A_row_major_flag, Ctype, ABtype, Ctype>;
+        using G = GemmEx<A_row_major_flag, Ctype, ABtype, ComputeType>;
         G::run(resources.cublasH, size, resources.A_row_major, resources.B_col_major, resources.C_expected_col_major);
     }
 }
