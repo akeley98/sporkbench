@@ -227,6 +227,11 @@ build.close()
 Qninja = shlex.quote(ninja)
 Qninja_f = shlex.quote(build_path)
 Qcompile_commands = shlex.quote(os.path.join(sporkbench_dir, "compile_commands.json"))
-os.system(f"{Qninja} -f {Qninja_f} -t compdb nvcc_Sm80 nvcc_Sm90a > {Qcompile_commands}")
-os.system(f"{Qninja} -f {Qninja_f}")
-print(f"\x1b[1m\x1b[33mOutput executable:\x1b[0m {exe_name}")
+exit_code = 0
+exit_code |= os.system(f"{Qninja} -f {Qninja_f} -t compdb nvcc_Sm80 nvcc_Sm90a > {Qcompile_commands}")
+exit_code |= os.system(f"{Qninja} -f {Qninja_f}")
+
+if exit_code != 0:
+    sys.exit(1)
+else:
+    print(f"\x1b[1m\x1b[33mOutput executable:\x1b[0m {exe_name}")
