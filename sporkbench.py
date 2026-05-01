@@ -104,6 +104,16 @@ for dname, _, fnames in os.walk(exocc_src_dir, followlinks=True):
             print(f"\x1b[1m\x1b[32mexocc:\x1b[0m {full_path}")
 
 
+# TODO crappy Exo include guard names
+stem_to_exocc_source = {}
+for src in exocc_sources:
+    prev = stem_to_exocc_source.setdefault(src.stem, src)
+    if prev is not src:
+        s1 = os.path.join(prev.rel_dir, prev.stem + ".py")
+        s2 = os.path.join(src.rel_dir, src.stem + ".py")
+        raise ValueError(f"Sorry, files anywhere cannot have the same stem name:\n{s1}\n{s2}")
+
+
 # We will write a build.ninja file to the bin_dir.
 build_path = os.path.join(bin_dir, "build.ninja")
 build = open(build_path, "w")
@@ -119,15 +129,14 @@ python3 = {Qarg(python3)}
 nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} -I {Qarg(kittens)} $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
     --expt-extended-lambda --expt-relaxed-constexpr $
-    --keep --keep-dir {Qarg(bin_dir)} $
     -Xptxas -v -Xptxas --warn-on-spills
 
 rule nvcc_Sm80
-  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d
+  command = mkdir -p $out.keep && $nvcc_bin --keep --keep-dir $out.keep -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode80 $in -o $out -MD -MF $out.d
   depfile = $out.d
 
 rule nvcc_Sm90a
-  command = $nvcc_bin -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a -DKITTENS_HOPPER=1 $in -o $out -MD -MF $out.d
+  command = mkdir -p $out.keep && $nvcc_bin --keep --keep-dir $out.keep -c --ptxas-options=-O3 -lineinfo $nvcc_args $archcode90a -DKITTENS_HOPPER=1 $in -o $out -MD -MF $out.d
   depfile = $out.d
 
 rule link
