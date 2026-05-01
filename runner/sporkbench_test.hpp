@@ -48,13 +48,14 @@ struct GemmTestResourcesT
     void* L2_shred_memory;
 };
 
-static_assert(std::variant_size_v<GemmCaseUnion> == 6, "Update GemmTestResourcesUnion");
+static_assert(std::variant_size_v<GemmCaseUnion> == 7, "Update GemmTestResourcesUnion");
 
 using GemmTestResourcesUnion = std::variant<
     GemmTestResourcesT<float, float>,
     GemmTestResourcesT<float, __half>,
     GemmTestResourcesT<__half, __half>,
     GemmTestResourcesT<float, __nv_bfloat16>,
+    GemmTestResourcesT<__nv_bfloat16, __nv_bfloat16>,
     GemmTestResourcesT<float, exo_e4m3>,
     GemmTestResourcesT<float, exo_e5m2>
 >;

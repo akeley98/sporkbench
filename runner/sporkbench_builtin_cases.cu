@@ -100,6 +100,12 @@ const std::vector<GemmCase_f32_bf16>& get_builtin_cases(const GemmCase_f32_bf16&
     return saved;
 }
 
+const std::vector<GemmCase_bf16_bf16>& get_builtin_cases(const GemmCase_bf16_bf16& arg)
+{
+    const static std::vector<GemmCase_bf16_bf16> saved = make_builtin_cases_gemm(arg);
+    return saved;
+}
+
 const std::vector<GemmCase_f32_e4m3>& get_builtin_cases(const GemmCase_f32_e4m3& arg)
 {
     const static std::vector<GemmCase_f32_e4m3> saved = make_builtin_cases_gemm(arg);
@@ -111,6 +117,8 @@ const std::vector<GemmCase_f32_e5m2>& get_builtin_cases(const GemmCase_f32_e5m2&
     const static std::vector<GemmCase_f32_e5m2> saved = make_builtin_cases_gemm(arg);
     return saved;
 }
+
+static_assert(std::variant_size_v<GemmCaseUnion> == 7);
 
 static const GemvCase builtin_gemv_cases[] = {
   GemvCase{

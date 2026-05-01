@@ -168,6 +168,7 @@ using GemmCase_f32_f32 = GemmCaseT<float, float>;
 using GemmCase_f32_f16 = GemmCaseT<float, __half>;
 using GemmCase_f16_f16 = GemmCaseT<__half, __half>;
 using GemmCase_f32_bf16 = GemmCaseT<float, exo_bf16>;
+using GemmCase_bf16_bf16 = GemmCaseT<exo_bf16, exo_bf16>;
 using GemmCase_f32_e4m3 = GemmCaseT<float, exo_e4m3>;
 using GemmCase_f32_e5m2 = GemmCaseT<float, exo_e5m2>;
 
@@ -176,6 +177,7 @@ using GemmCaseUnion = std::variant<
         GemmCase_f32_f16,
         GemmCase_f16_f16,
         GemmCase_f32_bf16,
+        GemmCase_bf16_bf16,
         GemmCase_f32_e4m3,
         GemmCase_f32_e5m2>;
 
@@ -185,6 +187,7 @@ const std::vector<GemmCase_f32_f32>& get_user_cases(const GemmCase_f32_f32&);
 const std::vector<GemmCase_f32_f16>& get_user_cases(const GemmCase_f32_f16&);
 const std::vector<GemmCase_f16_f16>& get_user_cases(const GemmCase_f16_f16&);
 const std::vector<GemmCase_f32_bf16>& get_user_cases(const GemmCase_f32_bf16&);
+const std::vector<GemmCase_bf16_bf16>& get_user_cases(const GemmCase_bf16_bf16&);
 const std::vector<GemmCase_f32_e4m3>& get_user_cases(const GemmCase_f32_e4m3&);
 const std::vector<GemmCase_f32_e5m2>& get_user_cases(const GemmCase_f32_e5m2&);
 // sporkbench_builtin_cases.cu
@@ -192,6 +195,7 @@ const std::vector<GemmCase_f32_f32>& get_builtin_cases(const GemmCase_f32_f32&);
 const std::vector<GemmCase_f32_f16>& get_builtin_cases(const GemmCase_f32_f16&);
 const std::vector<GemmCase_f16_f16>& get_builtin_cases(const GemmCase_f16_f16&);
 const std::vector<GemmCase_f32_bf16>& get_builtin_cases(const GemmCase_f32_bf16&);
+const std::vector<GemmCase_bf16_bf16>& get_builtin_cases(const GemmCase_bf16_bf16&);
 const std::vector<GemmCase_f32_e4m3>& get_builtin_cases(const GemmCase_f32_e4m3&);
 const std::vector<GemmCase_f32_e5m2>& get_builtin_cases(const GemmCase_f32_e5m2&);
 

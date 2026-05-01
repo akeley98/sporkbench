@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from template_symlink.make_tk_Sm90a_gemm import make_Sm90a_generic_gemm, make_Sm90a_generic_gemm_Brow
-
 from exo import *
 from exo.stdlib.scheduling import *
 from exo.platforms.cuda import *
 from exo.platforms.Sm80 import *
 from exo.platforms.Sm90 import *
 from exo.platforms.cuda_tk import *
+from exo.platforms.Sm90.tk_gemm_util import GemmConfig, handwrite_gemm
 
 from exo.scalars import bf16, f32, inf
 
@@ -25,8 +24,29 @@ def enable_gemm_window(p):
         p = set_window(p, c)
     return p
 
-QKt_gemm = enable_gemm_window(make_Sm90a_generic_gemm(2, 1, f32, T_type, T_type, []))
-SO_gemm = enable_gemm_window(make_Sm90a_generic_gemm_Brow(2, 1, f32, T_type, T_type, T_type, "row", [], smem_N=64))
+QKt_gemm = enable_gemm_window(handwrite_gemm(GemmConfig(
+    cta_M=128,
+    cta_N=64,
+    A_type=T_type,
+    B_type=T_type,
+    C_type=f32,
+    D_type=f32,
+    A_major="row",
+    B_major="col",
+    C_major="row",
+)))
+
+SO_gemm = enable_gemm_window(handwrite_gemm(GemmConfig(
+    cta_M=128,
+    cta_N=64,
+    A_type=T_type,
+    B_type=T_type,
+    C_type=T_type,
+    D_type=f32,
+    A_major="row",
+    B_major="row",
+    C_major="row",
+)))
 
 @proc
 def S_kernel(
@@ -162,7 +182,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         SeqLen,   # M
                         SeqLen,   # N
                         1,        # K_split
-                        Hdim,     # cluster_K
+                        Hdim,     # K_cluster
                         Q[batch:batch+1, kv_head, group, :, :, :],
                         K[batch:batch+1, kv_head, :, :, :],
                         QKt[:, :, :],
@@ -180,7 +200,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         SeqLen,   # M
                         Hdim,     # N
                         1,        # K_split
-                        SeqLen,   # cluster_K
+                        SeqLen,   # K_cluster
                         S[:, :, :, :],
                         V[batch:batch+1, kv_head, :, :, :],
                         O[batch:batch+1, kv_head, group, :, :],

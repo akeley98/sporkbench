@@ -22,6 +22,11 @@ struct GemmEx
         return CUBLAS_COMPUTE_16F;
     }
 
+    static cublasComputeType_t get_compute_code(__nv_bfloat16)
+    {
+        return CUBLAS_COMPUTE_32F;
+    }
+
     static cublasComputeType_t get_compute_code(float)
     {
         return CUBLAS_COMPUTE_32F;
