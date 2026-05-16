@@ -528,6 +528,11 @@ void generate_gemm_plot_samples(
                 size.N = N;
                 size.K_split = K_split;
                 size.K_cluster = K / K_split;
+                if (size.K_cluster < 128) {
+                    // XXX working around undocumented CUtensorMap requirement
+                    // that globalDim[i] >= boxDim[i] for all dimensions i.
+                    continue;
+                }
                 if (size.K_split * size.K_cluster != K) {
                     // We only support exact divisibilty for K_split for now.
                     continue;
