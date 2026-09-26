@@ -132,7 +132,7 @@ nvcc_bin = {Qarg(nvcc)}
 cxx = {Qarg(cxx)}
 exocc = {Qarg(exocc)}
 python3 = {Qarg(python3)}
-nvcc_args = -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} -I {Qarg(kittens)} $
+nvcc_args = -Dexo_control_t=int32_t -DNDEBUG=1 -Xcompiler -Wno-abi -I . -I {Qarg(sporkbench_dir)}/runner/ -I {Qarg(cutlass_include_dir)} -I {Qarg(kittens)} $
     -ccbin $cxx -O2 -Xcompiler -Wall -Xcompiler -fPIC -g -std=c++20 $
     --expt-extended-lambda --expt-relaxed-constexpr $
     -Xptxas -v -Xptxas --warn-on-spills

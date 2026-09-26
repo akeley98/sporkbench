@@ -173,10 +173,15 @@ std::vector<GemvPlotInput> generate_gemv_plot_inputs(CudaArch arch)
     plot_input.name = "gemv";
     plot_input.title = "GEMV, M=K";
     plot_input.x_axis = "M";
-    const int max_M = arch != CudaArch::Sm80 ? 65536 : 8192;
-    for (int m = 1024; m <= max_M; m *= 2) {
+    for (int m = 1024; m <= 8192; m *= 2) {
         plot_input.sizes.push_back({m, m});
         plot_input.sizes.push_back({m / 2 * 3, m / 2 * 3});
+    }
+    if (arch != CudaArch::Sm80) {
+        plot_input.sizes.push_back({16384, 16384});
+        plot_input.sizes.push_back({24576, 24576});
+        plot_input.sizes.push_back({32768, 32768});
+        plot_input.sizes.push_back({46336, 46336});  // Sized just under signed 32-bit limit.
     }
 
     std::vector<GemvPlotInput> plots = {plot_input};
