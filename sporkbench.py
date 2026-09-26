@@ -20,6 +20,12 @@ kittens = os.environ.get("EXO_KITTENS", None)
 if not kittens:
     raise ValueError("Missing $EXO_KITTENS")
 
+strict_cluster_mbarrier_env_var = "EXO_STRICT_CLUSTER_MBARRIER"
+if strict_cluster_mbarrier_env_var not in os.environ:
+    # We will copy NVIDIA's omission of release.cluster/acquire.cluster
+    # because we benchmark against NVIDIA-provided baselines.
+    os.environ[strict_cluster_mbarrier_env_var] = "0"
+
 # ninja has inconsistent quoting rules I don't fully understand.
 # It seems we want to use Qarg whenever the value is parsed
 # by a shell (e.g. specifying the nvcc bin) and we use
