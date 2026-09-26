@@ -172,15 +172,16 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                       Await(k_produced[kv_idx], cuda_generic_and_async_proxy, 0)
                       for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                         # First MMA writes block QKt to att_block_d.
-                        # We don't accumulate across kv-iterations, so use scale_d=0 to reset.
+                        # We don't accumulate across kv-iterations, so zero-init (scale-d = 0)
+                        # on the first step.
                         # head-dim is the K dimension, and we accum in 2 steps if Hdim is 128.
                         Fence(wgmma_fence_1, wgmma_fence_2)
-                        Sm90_tk_zero_scale_d(att_block_d[consumer, :, :, :], D=f32, N=kv_height)
                         for hdim64 in seq(0, Hdim / 64, pragma_unroll=0):
-                          Sm90_tk_mma_row_col(
+                          Sm90_tk_mma_row_col_zi(
                             att_block_d[consumer, :, :, :],
                             qo_smem[consumer, hdim64, :, :],
                             k_smem[kv_idx % RING, hdim64, :, :],
+                            hdim64 == 0,
                             D=f32, A=T_type, B=T_type, N=kv_height, K=64,
                           )
 
