@@ -8,6 +8,7 @@ from warnings import warn
 
 import ninja_syntax
 import shlex
+import subprocess
 
 sporkbench_dir = os.path.split(__file__)[0]
 python3 = sys.executable
@@ -40,10 +41,11 @@ def Qarg(s):
 # Quote path
 Qpath = ninja_syntax.escape_path
 
-if len(sys.argv) != 2:
-    raise ValueError("Expect 1 argument: directory to scan (e.g. examples/)")
+if len(sys.argv) != 3:
+    raise ValueError("Expect 2 arguments: directory to scan (e.g. examples/), and upload script (fake with `echo` if needed)")
 
 exocc_src_dir: str = sys.argv[1]
+upload_script_name = sys.argv[2]
 bin_dir: str = os.path.join(exocc_src_dir, "bin/sporkbench/")
 
 if not os.path.isdir(exocc_src_dir):
@@ -247,6 +249,8 @@ exit_code |= os.system(f"{Qninja} -f {Qninja_f} -t compdb nvcc_Sm80 nvcc_Sm90a >
 exit_code |= os.system(f"{Qninja} -f {Qninja_f}")
 
 if exit_code != 0:
+    print(f"\x1b[1m\x1b[31m!!!\x1b[0m Build Failed")
     sys.exit(1)
 else:
     print(f"\x1b[1m\x1b[33mOutput executable:\x1b[0m {exe_name}")
+    subprocess.run([upload_script_name, exe_name], check=True)
