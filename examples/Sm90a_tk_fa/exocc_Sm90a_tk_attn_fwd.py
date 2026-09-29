@@ -88,7 +88,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
                 with CudaWarps(0, 1, name="producer"):
                   # Load the Q tile for each consumer warpgroup.
-                  Await(q_consumed[0], cuda_temporal, 0)
+                  Await(q_consumed[0], cuda_async_proxy_retired, 0)
                   for tma_consumer in seq(0, num_consumers):
                     for tma_hdim64 in seq(0, Hdim/64):
                       Sm90_tma_load_2d(
@@ -100,13 +100,13 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                              64 * tma_hdim64 + 64],
                         size0=64, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, 1, 64, 64),
                       ) >> q_produced[0]
-                  Arrive(cuda_temporal) >> q_produced[0]
+                  Arrive(cuda_mbarrier_only) >> q_produced[0]
                 # End CudaWarps(0, 1, name="producer")
 
                 # Wait for the Q tile to show up before entering main loop.
                 with CudaWarps(name="consumer"):
                   Await(q_produced[0], cuda_generic_and_async_proxy, 0)
-                  Arrive(cuda_in_order) >> q_consumed[1]
+                  Arrive(cuda_async_proxy_retired) >> q_consumed[1]
                 # End CudaWarps(name="consumer")
 
                 # Initialize consumer state
@@ -140,7 +140,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                   if non_causal or kv_idx * kv_height < (1 + qo_task) * num_consumers * 64:
                     with CudaWarps(0, 1, name="producer"):
                       # Load K tile for iteration, shared by all consumers.
-                      Await(k_consumed[kv_idx], cuda_temporal, 0)
+                      Await(k_consumed[kv_idx], cuda_async_proxy_retired, 0)
                       for tma_hdim64 in seq(0, Hdim/64):
                         Sm90_tma_load_2d(
                           k_smem[kv_idx % RING, tma_hdim64, :, :],
@@ -151,9 +151,9 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                                tma_hdim64 * 64 + 64],
                           size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
                         ) >> k_produced[kv_idx]
-                      Arrive(cuda_temporal) >> k_produced[kv_idx]
+                      Arrive(cuda_mbarrier_only) >> k_produced[kv_idx]
                       # Load V tile for iteration, shared by all consumers.
-                      Await(v_consumed[kv_idx], cuda_temporal, 0)
+                      Await(v_consumed[kv_idx], cuda_async_proxy_retired, 0)
                       for tma_hdim64 in seq(0, Hdim/64):
                         Sm90_tma_load_2d(
                           v_smem[kv_idx % RING, tma_hdim64, :, :],
@@ -164,7 +164,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                                tma_hdim64 * 64 + 64],
                           size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
                         ) >> v_produced[kv_idx]
-                      Arrive(cuda_temporal) >> v_produced[kv_idx]
+                      Arrive(cuda_mbarrier_only) >> v_produced[kv_idx]
                     # End CudaWarps(0, 1, name="producer")
 
                     with CudaWarps(name="consumer"):
@@ -193,7 +193,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                             dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
                         Await(cg[consumer], cuda_generic_and_async_proxy, 0)
 
-                      Arrive(cuda_in_order) >> k_consumed[kv_idx + RING]
+                      Arrive(cuda_async_proxy_retired) >> k_consumed[kv_idx + RING]
                       for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
                         for w in cuda_threads(0, 4, unit=cuda_warp):
                           # Each warp updates its own [16, kv_height] tiles with non-async code.
@@ -261,7 +261,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                         )
                         Arrive(wgmma_async) >> cg[consumer]
                         Await(cg[consumer], cuda_generic_and_async_proxy, 0)
-                      Arrive(cuda_in_order) >> v_consumed[kv_idx + RING]
+                      Arrive(cuda_async_proxy_retired) >> v_consumed[kv_idx + RING]
                     # End with CudaWarps(name="consumer")
                   # End causal thing
                 # End for kv_idx
