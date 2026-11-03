@@ -17,7 +17,7 @@ inline const AttnFwdCase_bf16_f32_128 edited_tk_attn_fwd_case_bf16_f32_128
     1, INT32_MAX,
     1, INT32_MAX,
     1, INT32_MAX,
-    64, INT32_MAX,
+    128, INT32_MAX,  // SeqLen: kv_idx loop is SeqLen / 128 (rounded down)
     false
 };
 

@@ -17,7 +17,7 @@ inline const AttnFwdCase_bf16_f32_128_causal edited_tk_attn_fwd_causal_case_bf16
     1, INT32_MAX,
     1, INT32_MAX,
     1, INT32_MAX,
-    64, INT32_MAX,
+    128, INT32_MAX,  // SeqLen: producer/consumer kv_idx loop counts disagree otherwise
     false
 };
 

@@ -165,7 +165,10 @@ make_builtin_cases_attn_fwd()
     kittens_case.KV_Heads_max = INT32_MAX;
     kittens_case.Groups_divisor = 1;
     kittens_case.Groups_max = INT32_MAX;
-    kittens_case.SeqLen_divisor = 192;  // !!!
+    // !!! grid is seq_len/192 (rounded down) CTAs; non-causal additionally
+    // has kv_blocks = seq_len/128 (rounded down). Causal tolerates a partial
+    // last K/V tile (TMA zero-fill + causal mask).
+    kittens_case.SeqLen_divisor = Causal ? 192 : 384;
     kittens_case.SeqLen_max = INT32_MAX;
     std::vector<AttnFwdCaseT<T_type, L_type, Hdim, Causal>> cases{kittens_case};
 

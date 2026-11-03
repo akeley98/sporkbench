@@ -33,7 +33,33 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     qo_task_divisor = 64 * num_consumers
     RING = 256 // Hdim
     kv_height = 128
+
+    # !!! DIVISIBILITY RESTRICTION !!!
+    # Both cases require SeqLen % kv_height == 0.
+    # The `assert` is really an "assume": it's not checked at runtime.
+    #
+    # SeqLen % qo_task_divisor != 0 is OK, since cuda_tasks rounds up,
+    # but this relies on TMA out-of-bounds behavior not modelled by Exo:
+    #   * The last qo_task loads Q rows past SeqLen (zero-filled);
+    #     the corresponding O/lse rows are clipped by the TMA stores.
+    #   * Causal only: the closed-form causal iteration count (kv_iters, below)
+    #     is not clamped to SeqLen / kv_height, so the last qo_task may load
+    #     K/V tiles past SeqLen (zero-filled). For valid rows (< SeqLen), all
+    #     such columns are above the diagonal, so the causal mask hides them.
+    # (ThunderKittens mha_h100 instead requires SeqLen % 192 == 0, since it
+    # launches seq_len/192 CTAs, rounded down).
     SeqLen_divisor = kv_height
+
+    # Coefficients for selecting the kv_idx iteration count in closed form.
+    #   causal:     kv_iters = ceil((qo_task + 1) * qo_task_divisor / kv_height)
+    #               i.e. stop once the lower-left of the logit tile
+    #               (row = (1 + qo_task) * qo_task_divisor - 1, col = kv_idx * kv_height)
+    #               is strictly above the main diagonal.
+    #   non-causal: kv_iters = SeqLen / kv_height
+    # The managed ring buffer mbarriers must be sized for exactly kv_iters,
+    # since the ring buffer consumption is incremented by the logical extent.
+    causal_c = int(causal)
+    non_causal_c = int(non_causal)
 
     my_warp_config = [
         CudaWarpConfig("consumer", 4 * num_consumers, setmaxnreg_inc=160),
@@ -77,14 +103,14 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 lse_smem: L_type[num_consumers, 64] @ CudaSmemLinear
 
                 q_produced: barrier[1 @ ring_buffer_by(1)] @ CudaMbarrierPreArrive(0)
-                k_produced: barrier[(SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
-                v_produced: barrier[(SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
+                k_produced: barrier[(causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height)) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
+                v_produced: barrier[(causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height)) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
                 # ThunderKittens has a single compute_done variable.
                 # These are separated to q/k/v here.
                 # The q_consumed barrier only makes sense for a persistent kernel.
                 q_consumed: barrier[2 @ ring_buffer_by(1)] @ CudaMbarrierPreArrive(1)
-                k_consumed: barrier[(RING + SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
-                v_consumed: barrier[(RING + SeqLen / kv_height) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
+                k_consumed: barrier[(RING + (causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height))) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
+                v_consumed: barrier[(RING + (causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height))) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
 
                 with CudaWarps(0, 1, name="producer"):
                   # Load the Q tile for each consumer warpgroup.
@@ -132,138 +158,135 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 scale = log2_e * inv_sqrt_Hdim
 
                 # Accumulate along K/V height (row number increments by kv_height each iteration)
-                for kv_idx in seq(0, SeqLen / kv_height):
-                  # non-causal case must execute all iterations.
-                  # causal case may early exit if we know the lower-left of the logit tile
-                  # (row = (1 + qo_task) * num_consumers * 64 - 1, col = kv_idx * kv_height)
-                  # is strictly above the main diagonal.
-                  if non_causal or kv_idx * kv_height < (1 + qo_task) * num_consumers * 64:
-                    with CudaWarps(0, 1, name="producer"):
-                      # Load K tile for iteration, shared by all consumers.
-                      Await(k_consumed[kv_idx], cuda_async_proxy_retired, 0)
-                      for tma_hdim64 in seq(0, Hdim/64):
-                        Sm90_tma_load_2d(
-                          k_smem[kv_idx % RING, tma_hdim64, :, :],
-                          k_tm[batch, kv_head,
-                               kv_height * kv_idx :
-                               kv_height * kv_idx + kv_height,
-                               tma_hdim64 * 64 :
-                               tma_hdim64 * 64 + 64],
-                          size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
-                        ) >> k_produced[kv_idx]
-                      Arrive(cuda_mbarrier_only) >> k_produced[kv_idx]
-                      # Load V tile for iteration, shared by all consumers.
-                      Await(v_consumed[kv_idx], cuda_async_proxy_retired, 0)
-                      for tma_hdim64 in seq(0, Hdim/64):
-                        Sm90_tma_load_2d(
-                          v_smem[kv_idx % RING, tma_hdim64, :, :],
-                          v_tm[batch, kv_head,
-                               kv_height * kv_idx :
-                               kv_height * kv_idx + kv_height,
-                               tma_hdim64 * 64 :
-                               tma_hdim64 * 64 + 64],
-                          size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
-                        ) >> v_produced[kv_idx]
-                      Arrive(cuda_mbarrier_only) >> v_produced[kv_idx]
-                    # End CudaWarps(0, 1, name="producer")
+                # Iteration count is kv_iters in closed form (see top of make_attn).
+                # We can't early-exit with an if statement, since the managed ring buffer
+                # mbarriers must be explicitly sized for the number of iterations executed.
+                for kv_idx in seq(0, (causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height))):
+                  with CudaWarps(0, 1, name="producer"):
+                    # Load K tile for iteration, shared by all consumers.
+                    Await(k_consumed[kv_idx], cuda_async_proxy_retired, 0)
+                    for tma_hdim64 in seq(0, Hdim/64):
+                      Sm90_tma_load_2d(
+                        k_smem[kv_idx % RING, tma_hdim64, :, :],
+                        k_tm[batch, kv_head,
+                             kv_height * kv_idx :
+                             kv_height * kv_idx + kv_height,
+                             tma_hdim64 * 64 :
+                             tma_hdim64 * 64 + 64],
+                        size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
+                      ) >> k_produced[kv_idx]
+                    Arrive(cuda_mbarrier_only) >> k_produced[kv_idx]
+                    # Load V tile for iteration, shared by all consumers.
+                    Await(v_consumed[kv_idx], cuda_async_proxy_retired, 0)
+                    for tma_hdim64 in seq(0, Hdim/64):
+                      Sm90_tma_load_2d(
+                        v_smem[kv_idx % RING, tma_hdim64, :, :],
+                        v_tm[batch, kv_head,
+                             kv_height * kv_idx :
+                             kv_height * kv_idx + kv_height,
+                             tma_hdim64 * 64 :
+                             tma_hdim64 * 64 + 64],
+                        size0=kv_height, size1=64, dst=T_type, src=T_type, smem_box=(1, 1, kv_height, 64),
+                      ) >> v_produced[kv_idx]
+                    Arrive(cuda_mbarrier_only) >> v_produced[kv_idx]
+                  # End CudaWarps(0, 1, name="producer")
 
-                    with CudaWarps(name="consumer"):
-                      cg: barrier[num_consumers] @ Sm90_WgmmaCommitGroup
-                      Await(k_produced[kv_idx], cuda_generic_and_async_proxy, 0)
-                      for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
-                        # First MMA writes block QKt to att_block_d.
-                        # We don't accumulate across kv-iterations, so zero-init (scale-d = 0)
-                        # on the first step.
-                        # head-dim is the K dimension, and we accum in 2 steps if Hdim is 128.
-                        Fence(wgmma_fence_1, wgmma_fence_2)
-                        for hdim64 in seq(0, Hdim / 64, pragma_unroll=0):
-                          Sm90_tk_mma_row_col_zi(
-                            att_block_d[consumer, :, :, :],
-                            qo_smem[consumer, hdim64, :, :],
-                            k_smem[kv_idx % RING, hdim64, :, :],
-                            hdim64 == 0,
-                            D=f32, A=T_type, B=T_type, N=kv_height, K=64,
-                          )
-
-                        # Compute max_vec_last_scaled while we wait for wgmma to retire.
-                        Arrive(wgmma_async) >> cg[consumer]
-                        for w in cuda_threads(0, 4, unit=cuda_warp):
-                          cuda_tk_vec_mul_3op_scalar(
-                            max_vec_last_scaled[consumer, w, :], max_vec[consumer, w, :], scale,
-                            dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
-                        Await(cg[consumer], cuda_generic_and_async_proxy, 0)
-
-                      Arrive(cuda_async_proxy_retired) >> k_consumed[kv_idx + RING]
-                      for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
-                        for w in cuda_threads(0, 4, unit=cuda_warp):
-                          # Each warp updates its own [16, kv_height] tiles with non-async code.
-                          if causal:
-                            cuda_tk_make_causal_neg_inf(
-                              # current row offset
-                              64 * (qo_task * num_consumers + consumer) + 16 * w,
-                              # current col offset
-                              kv_idx * kv_height,
-                              att_block_d[consumer, w, :, :],
-                              dst=f32, rows=16, cols=kv_height,
-                            )
-                          # End if causal
-                          cuda_tk_row_max(
-                            max_vec[consumer, w, :], att_block_d[consumer, w, :, :],
-                            dst=f32, src=f32, rows=16, cols=kv_height)
-                          cuda_tk_tile_mul_3op_scalar(
-                            att_block_scaled[consumer, w, :, :], att_block_d[consumer, w, :, :], scale,
-                            dst=f32, lhs=f32, rhs=f32, rows=16, cols=kv_height)
-                          cuda_tk_vec_mul_3op_scalar(
-                            max_vec_scaled[consumer, w, :], max_vec[consumer, w, :], scale,
-                            dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
-                          cuda_tk_sub_row(
-                            att_block_scaled[consumer, w, :, :], max_vec_scaled[consumer, w, :],
-                            dst=f32, src=f32, rows=16, cols=kv_height)
-                          cuda_tk_tile_exp2(
-                            att_block_exp2[consumer, w, :, :], att_block_scaled[consumer, w, :, :],
-                            dst=f32, src=f32, rows=16, cols=kv_height)
-                          cuda_tk_vec_sub_lhs(
-                            max_vec_last_scaled[consumer, w, :], max_vec_scaled[consumer, w, :],
-                            dst=f32, src=f32, length=16, layout=vec_layout)
-                          cuda_tk_vec_exp2(
-                            max_vec_last_exp2[consumer, w, :], max_vec_last_scaled[consumer, w, :],
-                            dst=f32, src=f32, length=16, layout=vec_layout)
-                          cuda_tk_vec_mul_lhs(
-                            norm_vec[consumer, w, :], max_vec_last_exp2[consumer, w, :],
-                            dst=f32, src=f32, length=16, layout=vec_layout)
-                          cuda_tk_row_sum(
-                            norm_vec[consumer, w, :], att_block_exp2[consumer, w, :, :],
-                            dst=f32, src=f32, rows=16, cols=kv_height)
-                          rmem_zero: f32 @ CudaRmemUniform(32)
-                          rmem_zero = 0
-                          cuda_tk_tile_add_lhs_scalar(
-                            att_block_exp2[consumer, w, :, :], rmem_zero,
-                            dst=f32, src=f32, rows=16, cols=kv_height)
-                          cuda_tk_tile_copy(
-                            att_block_a[consumer, w, :, :], att_block_exp2[consumer, w, :, :],
-                            dst=T_type, src=f32, rows=16, cols=kv_height)
-                          cuda_tk_mul_row(
-                            o_reg[consumer, w, :, :], max_vec_last_exp2[consumer, w, :],
-                            dst=f32, src=f32, rows=16, cols=Hdim)
-                        # End for w in cuda_threads(0, 4, unit=cuda_warp)
-
-                      # Second MMA accumulates to O the product of att_block_exp2
-                      # (cast to T_type, att_block_a) and the current tile of V.
-                      # Both are row major now.
-                      Await(v_produced[kv_idx], cuda_generic_and_async_proxy, 0)
-                      for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
-                        Fence(wgmma_fence_1, wgmma_fence_2)
-                        Sm90_tk_mma_rmem_row(
-                          o_reg[consumer, :, :, :],
-                          att_block_a[consumer, :, :, :],
-                          v_smem[kv_idx % RING, :, :, :],
-                          D=f32, A=T_type, B=T_type, N64=Hdim // 64, K=kv_height,
+                  with CudaWarps(name="consumer"):
+                    cg: barrier[num_consumers] @ Sm90_WgmmaCommitGroup
+                    Await(k_produced[kv_idx], cuda_generic_and_async_proxy, 0)
+                    for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
+                      # First MMA writes block QKt to att_block_d.
+                      # We don't accumulate across kv-iterations, so zero-init (scale-d = 0)
+                      # on the first step.
+                      # head-dim is the K dimension, and we accum in 2 steps if Hdim is 128.
+                      Fence(wgmma_fence_1, wgmma_fence_2)
+                      for hdim64 in seq(0, Hdim / 64, pragma_unroll=0):
+                        Sm90_tk_mma_row_col_zi(
+                          att_block_d[consumer, :, :, :],
+                          qo_smem[consumer, hdim64, :, :],
+                          k_smem[kv_idx % RING, hdim64, :, :],
+                          hdim64 == 0,
+                          D=f32, A=T_type, B=T_type, N=kv_height, K=64,
                         )
-                        Arrive(wgmma_async) >> cg[consumer]
-                        Await(cg[consumer], cuda_generic_and_async_proxy, 0)
-                      Arrive(cuda_async_proxy_retired) >> v_consumed[kv_idx + RING]
-                    # End with CudaWarps(name="consumer")
-                  # End causal thing
+
+                      # Compute max_vec_last_scaled while we wait for wgmma to retire.
+                      Arrive(wgmma_async) >> cg[consumer]
+                      for w in cuda_threads(0, 4, unit=cuda_warp):
+                        cuda_tk_vec_mul_3op_scalar(
+                          max_vec_last_scaled[consumer, w, :], max_vec[consumer, w, :], scale,
+                          dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
+                      Await(cg[consumer], cuda_generic_and_async_proxy, 0)
+
+                    Arrive(cuda_async_proxy_retired) >> k_consumed[kv_idx + RING]
+                    for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
+                      for w in cuda_threads(0, 4, unit=cuda_warp):
+                        # Each warp updates its own [16, kv_height] tiles with non-async code.
+                        if causal:
+                          cuda_tk_make_causal_neg_inf(
+                            # current row offset
+                            64 * (qo_task * num_consumers + consumer) + 16 * w,
+                            # current col offset
+                            kv_idx * kv_height,
+                            att_block_d[consumer, w, :, :],
+                            dst=f32, rows=16, cols=kv_height,
+                          )
+                        # End if causal
+                        cuda_tk_row_max(
+                          max_vec[consumer, w, :], att_block_d[consumer, w, :, :],
+                          dst=f32, src=f32, rows=16, cols=kv_height)
+                        cuda_tk_tile_mul_3op_scalar(
+                          att_block_scaled[consumer, w, :, :], att_block_d[consumer, w, :, :], scale,
+                          dst=f32, lhs=f32, rhs=f32, rows=16, cols=kv_height)
+                        cuda_tk_vec_mul_3op_scalar(
+                          max_vec_scaled[consumer, w, :], max_vec[consumer, w, :], scale,
+                          dst=f32, lhs=f32, rhs=f32, length=16, layout=vec_layout)
+                        cuda_tk_sub_row(
+                          att_block_scaled[consumer, w, :, :], max_vec_scaled[consumer, w, :],
+                          dst=f32, src=f32, rows=16, cols=kv_height)
+                        cuda_tk_tile_exp2(
+                          att_block_exp2[consumer, w, :, :], att_block_scaled[consumer, w, :, :],
+                          dst=f32, src=f32, rows=16, cols=kv_height)
+                        cuda_tk_vec_sub_lhs(
+                          max_vec_last_scaled[consumer, w, :], max_vec_scaled[consumer, w, :],
+                          dst=f32, src=f32, length=16, layout=vec_layout)
+                        cuda_tk_vec_exp2(
+                          max_vec_last_exp2[consumer, w, :], max_vec_last_scaled[consumer, w, :],
+                          dst=f32, src=f32, length=16, layout=vec_layout)
+                        cuda_tk_vec_mul_lhs(
+                          norm_vec[consumer, w, :], max_vec_last_exp2[consumer, w, :],
+                          dst=f32, src=f32, length=16, layout=vec_layout)
+                        cuda_tk_row_sum(
+                          norm_vec[consumer, w, :], att_block_exp2[consumer, w, :, :],
+                          dst=f32, src=f32, rows=16, cols=kv_height)
+                        rmem_zero: f32 @ CudaRmemUniform(32)
+                        rmem_zero = 0
+                        cuda_tk_tile_add_lhs_scalar(
+                          att_block_exp2[consumer, w, :, :], rmem_zero,
+                          dst=f32, src=f32, rows=16, cols=kv_height)
+                        cuda_tk_tile_copy(
+                          att_block_a[consumer, w, :, :], att_block_exp2[consumer, w, :, :],
+                          dst=T_type, src=f32, rows=16, cols=kv_height)
+                        cuda_tk_mul_row(
+                          o_reg[consumer, w, :, :], max_vec_last_exp2[consumer, w, :],
+                          dst=f32, src=f32, rows=16, cols=Hdim)
+                      # End for w in cuda_threads(0, 4, unit=cuda_warp)
+
+                    # Second MMA accumulates to O the product of att_block_exp2
+                    # (cast to T_type, att_block_a) and the current tile of V.
+                    # Both are row major now.
+                    Await(v_produced[kv_idx], cuda_generic_and_async_proxy, 0)
+                    for consumer in cuda_threads(0, num_consumers, unit=cuda_warpgroup):
+                      Fence(wgmma_fence_1, wgmma_fence_2)
+                      Sm90_tk_mma_rmem_row(
+                        o_reg[consumer, :, :, :],
+                        att_block_a[consumer, :, :, :],
+                        v_smem[kv_idx % RING, :, :, :],
+                        D=f32, A=T_type, B=T_type, N64=Hdim // 64, K=kv_height,
+                      )
+                      Arrive(wgmma_async) >> cg[consumer]
+                      Await(cg[consumer], cuda_generic_and_async_proxy, 0)
+                    Arrive(cuda_async_proxy_retired) >> v_consumed[kv_idx + RING]
+                  # End with CudaWarps(name="consumer")
                 # End for kv_idx
 
                 # Epilogue 1/2: each consumer writes out its own output tile and lse_vec
@@ -353,8 +376,8 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
 
 # attn_64 = make_attn(64, False, cases)
 attn_128 = make_attn(128, False, cases)
-# attn_64_causal = make_attn(64, True, cases)
-# attn_128_causal = make_attn(128, True, cases)
+attn_64_causal = make_attn(64, True, cases)
+attn_128_causal = make_attn(128, True, cases)
 
 
 import json
