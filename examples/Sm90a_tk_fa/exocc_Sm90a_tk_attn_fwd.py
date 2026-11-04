@@ -58,6 +58,14 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
     #   non-causal: kv_iters = SeqLen / kv_height
     # The managed ring buffer mbarriers must be sized for exactly kv_iters,
     # since the ring buffer consumption is incremented by the logical extent.
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # !!! INTENTIONALLY BROKEN (akeley98/hamster_crooked branch) -- DO NOT MERGE !!!
+    # !!! The causal kv_iters is one too small, so the last (diagonal) K/V tile     !!!
+    # !!! is skipped. Barriers are sized consistently, so sync_check still passes;  !!!
+    # !!! only the numerical output is wrong. Purpose: confirm that the sporkbench  !!!
+    # !!! correctness test actually catches real errors.                            !!!
+    # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    CROOKED_OFF_BY_ONE = 1
     causal_c = int(causal)
     non_causal_c = int(non_causal)
 
@@ -103,14 +111,14 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 lse_smem: L_type[num_consumers, 64] @ CudaSmemLinear
 
                 q_produced: barrier[1 @ ring_buffer_by(1)] @ CudaMbarrierPreArrive(0)
-                k_produced: barrier[(causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height)) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
-                v_produced: barrier[(causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height)) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
+                k_produced: barrier[(causal_c * ((((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) - CROOKED_OFF_BY_ONE) + non_causal_c * (SeqLen / kv_height)) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
+                v_produced: barrier[(causal_c * ((((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) - CROOKED_OFF_BY_ONE) + non_causal_c * (SeqLen / kv_height)) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(0)
                 # ThunderKittens has a single compute_done variable.
                 # These are separated to q/k/v here.
                 # The q_consumed barrier only makes sense for a persistent kernel.
                 q_consumed: barrier[2 @ ring_buffer_by(1)] @ CudaMbarrierPreArrive(1)
-                k_consumed: barrier[(RING + (causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height))) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
-                v_consumed: barrier[(RING + (causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height))) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
+                k_consumed: barrier[(RING + (causal_c * ((((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) - CROOKED_OFF_BY_ONE) + non_causal_c * (SeqLen / kv_height))) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
+                v_consumed: barrier[(RING + (causal_c * ((((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) - CROOKED_OFF_BY_ONE) + non_causal_c * (SeqLen / kv_height))) @ ring_buffer_by(RING)] @ CudaMbarrierPreArrive(RING)
 
                 with CudaWarps(0, 1, name="producer"):
                   # Load the Q tile for each consumer warpgroup.
@@ -161,7 +169,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 # Iteration count is kv_iters in closed form (see top of make_attn).
                 # We can't early-exit with an if statement, since the managed ring buffer
                 # mbarriers must be explicitly sized for the number of iterations executed.
-                for kv_idx in seq(0, (causal_c * (((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) + non_causal_c * (SeqLen / kv_height))):
+                for kv_idx in seq(0, (causal_c * ((((1 + qo_task) * qo_task_divisor + kv_height - 1) / kv_height) - CROOKED_OFF_BY_ONE) + non_causal_c * (SeqLen / kv_height))):
                   with CudaWarps(0, 1, name="producer"):
                     # Load K tile for iteration, shared by all consumers.
                     Await(k_consumed[kv_idx], cuda_async_proxy_retired, 0)
@@ -351,7 +359,7 @@ def make_attn(Hdim: int, causal: bool, cases: List[dict]):
                 Fence(cuda_in_order, cuda_in_order)
 
     p = simplify(p)
-    p = rename(p, f"exo_tk_attn_fwd_Hdim{Hdim}" + "_causal" * causal)
+    p = rename(p, f"exo_tk_attn_fwd_Hdim{Hdim}" + "_causal_crooked" * causal)
 
     sync_check_before = time.time()
     p.sync_check(Batch=1, KV_Heads=2, Groups=2, SeqLen=640)
