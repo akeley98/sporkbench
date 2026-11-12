@@ -182,6 +182,13 @@ For each kernel, we sort the samples and plot the performance (in FLOPS) as the 
 For Exo, we plot the performance of the best-performing kernel for the problem size (issue: could this give an unfair advantage, with random noise giving Exo more ``chances'' to get lucky?).
 The samples from the full 100 runs are still reported in the output JSON.
 
+FLOP counts (1 multiply-add = 2 FLOPs; only tensor FLOPs are counted):
+
+* GEMM: `2 L M N K`. GEMV: `2 M K`.
+
+* Attention forward (attention core, `Q K^T` and `P V`), per batch, with `n = SeqLen` and `d = (query heads) * Hdim`: `4 n^2 d` non-causal; `2 n^2 d` causal, counting only the unmasked half of the score matrix.
+  Runs of sporkbench up to `9e32b9f` also counted causal attention as `4 n^2 d` (twice as many FLOPs).
+
 
 # External Software Used
 

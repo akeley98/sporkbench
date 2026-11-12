@@ -420,10 +420,15 @@ double run_attn_fwd_case_impl(
     float ms;
     cudaEventElapsedTime(&ms, resources.start_event, resources.end_event);
 
-    // Only counted tensor flops
+    // Only counted tensor flops (attention core: Q K^T and P V; 1 multiply-add = 2 flops).
+    // With n = SeqLen, d = (query heads) * Hdim, per batch:
+    //   non-causal: 4 n^2 d
+    //   causal:    ~2 n^2 d  (only the unmasked half of the score matrix is computed)
     const auto qk_macs = double(size.SeqLen) * size.SeqLen * Hdim;
     const auto so_macs = double(size.SeqLen) * size.SeqLen * Hdim;
-    const double flops = double(size.Batch * size.KV_Heads * size.Groups) * (qk_macs + so_macs) * 2000.0 / ms;
+    const double causal_factor = Causal ? 0.5 : 1.0;
+    const double flops = double(size.Batch * size.KV_Heads * size.Groups) * (qk_macs + so_macs)
+                       * causal_factor * 2000.0 / ms;
     return flops;
 }
 

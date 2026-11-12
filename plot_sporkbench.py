@@ -129,10 +129,7 @@ def get_peak_flops(j_plot) -> Optional[float]:
         # Title ends with " (sm_90a.{T}, Hdim={Hdim}, causal)" or ", non-causal)"
         m = re.search(r"\(sm_90a\.(\w+), Hdim=\d+, (causal|non-causal)\)$", title)
         assert m, f"can't find T type in {title!r}"
-        peak = get_known_gpu(j_plot).tensor_peak_flops(m.group(1))
-        if m.group(2) == "non-causal":
-            peak /= 2.0  # Preserves earlier behavior
-        return peak
+        return get_known_gpu(j_plot).tensor_peak_flops(m.group(1))
     elif "GEMV" in title:
         return None  # GEMV peak (memory bandwidth) no longer maintained
     else:
