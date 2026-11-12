@@ -33,7 +33,87 @@ struct MainData
     cublasHandle_t cublasH;
     cudaEvent_t start_event, end_event;
     FILE* json_file;
+    std::string gpu_json;  // GPU description, repeated in each plot object
 };
+
+std::string json_escape(const char* s)
+{
+    std::string result;
+    for (; *s; ++s) {
+        const unsigned char c = *s;
+        if (c == '"' || c == '\\') {
+            result += '\\';
+            result += char(c);
+        }
+        else if (c < 0x20) {
+            char buf[8];
+            snprintf(buf, sizeof buf, "\\u%04x", c);
+            result += buf;
+        }
+        else {
+            result += char(c);
+        }
+    }
+    return result;
+}
+
+// JSON object identifying the GPU; see README "Plot Data".
+// Distinguish e.g. H100 PCIe ("NVIDIA H100 PCIe", 114 SMs) from H100 SXM5
+// ("NVIDIA H100 80GB HBM3", 132 SMs) by name, sm_count, and clocks.
+std::string make_gpu_json(int device)
+{
+    cudaDeviceProp prop{};
+    if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) {
+        throw std::runtime_error("cudaGetDeviceProperties failed\n");
+    }
+    auto attr = [device] (cudaDeviceAttr a)
+    {
+        int value = 0;
+        if (cudaDeviceGetAttribute(&value, a, device) != cudaSuccess) {
+            throw std::runtime_error("cudaDeviceGetAttribute failed\n");
+        }
+        return value;
+    };
+    char pci_bus_id[32] = "";
+    if (cudaDeviceGetPCIBusId(pci_bus_id, sizeof pci_bus_id, device) != cudaSuccess) {
+        throw std::runtime_error("cudaDeviceGetPCIBusId failed\n");
+    }
+    // Same format as nvidia-smi
+    char uuid[48];
+    const unsigned char* u = reinterpret_cast<const unsigned char*>(prop.uuid.bytes);
+    snprintf(uuid, sizeof uuid,
+             "GPU-%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             u[0], u[1], u[2], u[3], u[4], u[5], u[6], u[7],
+             u[8], u[9], u[10], u[11], u[12], u[13], u[14], u[15]);
+    int driver_version = 0, runtime_version = 0;
+    cudaDriverGetVersion(&driver_version);
+    cudaRuntimeGetVersion(&runtime_version);
+
+    char buf[2048];
+    snprintf(
+        buf, sizeof buf,
+        "{\"name\": \"%s\", \"uuid\": \"%s\", \"pci_bus_id\": \"%s\", "
+        "\"cc_major\": %i, \"cc_minor\": %i, \"sm_count\": %i, "
+        "\"max_sm_clock_khz\": %i, \"max_memory_clock_khz\": %i, \"memory_bus_width_bits\": %i, "
+        "\"global_memory_bytes\": %zu, \"l2_cache_bytes\": %i, \"max_smem_per_block_optin_bytes\": %i, "
+        "\"cuda_driver_version\": %i, \"cuda_runtime_version\": %i}",
+        json_escape(prop.name).c_str(),
+        uuid,
+        pci_bus_id,
+        attr(cudaDevAttrComputeCapabilityMajor),
+        attr(cudaDevAttrComputeCapabilityMinor),
+        attr(cudaDevAttrMultiProcessorCount),
+        attr(cudaDevAttrClockRate),
+        attr(cudaDevAttrMemoryClockRate),
+        attr(cudaDevAttrGlobalMemoryBusWidth),
+        size_t(prop.totalGlobalMem),
+        attr(cudaDevAttrL2CacheSize),
+        attr(cudaDevAttrMaxSharedMemoryPerBlockOptin),
+        driver_version,
+        runtime_version
+    );
+    return buf;
+}
 
 struct TestDataConfig
 {
@@ -801,6 +881,8 @@ int Main(int argc, char** argv)
     }
     const char* p_arch_name = arch_name(arch);
     fprintf(stderr, "CudaArch::%s\n", p_arch_name);
+    main_data.gpu_json = make_gpu_json(0);
+    fprintf(stderr, "GPU: %s\n", main_data.gpu_json.c_str());
 
     if (const cudaError_t err = cudaEventCreate(&main_data.start_event)) {
         throw std::runtime_error("cudaEventCreate failed\n");
@@ -819,11 +901,14 @@ int Main(int argc, char** argv)
     {
         fprintf(
                 main_data.json_file,
-                " %c{\"name\": \"%s\", \"title\": \"%s\", \"x_axis\": \"%s\", \"samples\": [\n",
+                " %c{\"name\": \"%s\", \"title\": \"%s\", \"x_axis\": \"%s\",\n"
+                "   \"gpu\": %s,\n"
+                "   \"samples\": [\n",
                 need_comma ? ',' : ' ',
                 plot_input.name.c_str(),
                 plot_input.title.c_str(),
-                plot_input.x_axis.c_str()
+                plot_input.x_axis.c_str(),
+                main_data.gpu_json.c_str()
         );
         need_comma = true;
     };

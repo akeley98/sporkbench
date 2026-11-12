@@ -95,10 +95,34 @@ Each plot object corresponds to a C++ `GemmPlotInput`, `GemvPlotInput`, or `Attn
         "name": str  # Used for file name
         "title": str
         "x_axis":  str  # Name of a size parameter, e.g. M, K, SeqLen
+        "gpu": GpuData  # GPU the samples were taken on (same in every plot object)
         "samples": List[SampleData]
     }
 
-where each `SampleData` object contains
+where the `GpuData` object (from `cudaGetDeviceProperties` / `cudaDeviceGetAttribute` for device 0) contains
+
+    {
+        "name": str  # e.g. "NVIDIA H100 PCIe", "NVIDIA H100 80GB HBM3" (SXM5), "NVIDIA H100 NVL"
+        "uuid": str  # Same format as nvidia-smi, e.g. "GPU-fb612e04-..."
+        "pci_bus_id": str  # e.g. "0000:01:00.0"
+        "cc_major": int  # Compute capability
+        "cc_minor": int
+        "sm_count": int  # e.g. H100 PCIe: 114; H100 SXM5: 132
+        "max_sm_clock_khz": int
+        "max_memory_clock_khz": int
+        "memory_bus_width_bits": int
+        "global_memory_bytes": int
+        "l2_cache_bytes": int
+        "max_smem_per_block_optin_bytes": int
+        "cuda_driver_version": int  # e.g. 12030 for CUDA 12.3
+        "cuda_runtime_version": int
+    }
+
+To tell H100 variants apart, use `name` (the PCIe and SXM5 parts report different names) and `sm_count` (114 vs 132); the clocks also differ.
+Power limits (350 W PCIe vs 700 W SXM5) are not recorded, since that would require NVML.
+`plot_sporkbench.py` matches this against `known_gpus` (with the datasheet source of its peak TFLOPS) for the "% of peak" axis.
+
+and each `SampleData` object contains
 
     # GEMM
     {
