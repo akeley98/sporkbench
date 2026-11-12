@@ -23,6 +23,29 @@ def get_case_name(j_kernel):
     return name
 
 
+def exo_gemm_strategy_note(j_plot):
+    """Legend note for the Exo-GPU Sm90 gemm strategy in this plot, if any.
+
+    Sm90 Exo gemm proc names must say "_coop" or "_ping_pong" (tk_gemm_util)."""
+    if not j_plot["title"].startswith("GEMM"):
+        return None
+    strategies = set()
+    for j_sample in j_plot["samples"]:
+        for j_kernel in j_sample["kernels"]:
+            proc = j_kernel["proc"]
+            if j_kernel["is_builtin"] or "Sm90" not in proc:
+                continue
+            is_coop = "_coop" in proc
+            is_ping_pong = "_ping_pong" in proc
+            assert is_coop != is_ping_pong, f"{proc}: expected _coop xor _ping_pong in name"
+            strategies.add("coop" if is_coop else "ping_pong")
+    if strategies == {"coop"}:
+        return "Exo-GPU: cooperative only"
+    if strategies == {"ping_pong"}:
+        return "Exo-GPU: ping-pong only"
+    return None
+
+
 def plot(j_plot, output_dir_name):
     title = j_plot["title"]
     x_key = j_plot["x_axis"]
@@ -151,6 +174,10 @@ def plot(j_plot, output_dir_name):
 
     def int_formatter(val, *args):
         return str(int(val))
+
+    if (note := exo_gemm_strategy_note(j_plot)) is not None:
+        # Text-only legend entry (no line).
+        ax.plot([], [], " ", label=note)
 
     ax.grid()
     ax.legend()
