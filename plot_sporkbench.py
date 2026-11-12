@@ -17,6 +17,10 @@ from matplotlib import ticker
 # HACK: leave out kernels whose proc name matches edited_* or *_edited_*.
 skip_edited_kernels = True
 
+# HACK: plot a separate "Exo-GPU (K_split > 1)" curve for split-K Exo kernels.
+# (Split-K kernels still count toward the other Exo-GPU curves either way.)
+plot_split_k_curve = False
+
 
 plt.rcParams.update({"font.size": 15, "figure.figsize": [8.0, 4.8]})
 
@@ -189,7 +193,7 @@ def plot(j_plot, output_dir_name):
                 # labels = (f"Exo-GPU ({best_exo_case_name})", exo_specialized_label)
             else:
                 labels = (exo_specialized_label, )
-            if j_kernel.get("K_split", 1) > 1:
+            if plot_split_k_curve and j_kernel.get("K_split", 1) > 1:
                 labels = labels + (exo_split_k_label, )
             for label in labels:
                 y_per_sample = labels_y.get(label)
