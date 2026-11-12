@@ -14,6 +14,10 @@ import matplotlib.pyplot as plt
 from matplotlib import ticker
 
 
+# HACK: leave out kernels whose proc name matches edited_* or *_edited_*.
+skip_edited_kernels = True
+
+
 plt.rcParams.update({"font.size": 15, "figure.figsize": [8.0, 4.8]})
 
 
@@ -290,6 +294,16 @@ if __name__ == "__main__":
 
     names_to_titles = {}
     for j_plot in j_top:
+        if skip_edited_kernels:
+            for j_sample in j_plot["samples"]:
+                j_sample["kernels"] = [
+                    j_kernel
+                    for j_kernel in j_sample["kernels"]
+                    if not (
+                        j_kernel["proc"].startswith("edited_")
+                        or "_edited_" in j_kernel["proc"]
+                    )
+                ]
         add_legacy_attn_hdim(j_plot)
         name = j_plot["name"]
         title = j_plot["title"]
