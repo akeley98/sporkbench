@@ -24,3 +24,4 @@ elf.o
 *.py.json
 /*.json
 *_plot
+
