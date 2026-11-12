@@ -9,14 +9,25 @@ script_dir, script_name = os.path.split(script_path)
 assert script_dir.endswith("examples")
 
 
+# Scheduled ping-pong gemm only supports a fixed K_cluster (tk_gemm_util GemmConfig.K_cluster).
+sched_ping_pong_K_cluster = 512
+
+
 @dataclass(slots=True)
 class DirConfig:
     schedule_it: bool
     AB_type: str
+    ping_pong: bool
+
+    def make_strat(self):
+        return "pingpong" if self.ping_pong else "coop"
 
     def make_dir_name(self):
         verb = "schedule" if self.schedule_it else "handwrite"
-        return f"Sm90a_{self.AB_type}_{verb}_row_col_gemm"
+        return f"Sm90a_{self.AB_type}_{verb}_{self.make_strat()}_row_col_gemm"
+
+    def fixed_K_cluster(self):
+        return sched_ping_pong_K_cluster if self.schedule_it and self.ping_pong else None
 
 
 type_letters = {
@@ -31,10 +42,9 @@ class FileConfig:
     ncta_M: int
     ncta_N: int
     enable_split_k: bool
-    ping_pong: bool
 
     def make_file_name(self, dconf: DirConfig):
-        strat = "pingpong" if self.ping_pong else "coop"
+        strat = dconf.make_strat()
         k = "splitK" if self.enable_split_k else "os"
         prov = "S" if dconf.schedule_it else "H"
         types = "".join(type_letters[t] for t in (dconf.AB_type, dconf.AB_type, "f32", "f32"))
@@ -48,10 +58,14 @@ class KernelConf:
     ring_depth: int
 
     def make_smem_usage(self, ping_pong: bool):
+        # 128-byte (swizzle) rows of A/B per ring slot; f32 C staging tile.
         M, N, R = self.cta_M, self.cta_N, self.ring_depth
         if ping_pong:
-            return 4 * (M // 2) * N + 128 * R * (M + 2 * N)
+            # Each warpgroup does a (M / 2, N) tile; A/B ring shared by both
+            # warpgroups, and C_smem is one (M / 2, N) tile shared by both.
+            return 4 * (M // 2) * N + 128 * R * (M // 2 + N)
         else:
+            # C_smem aliases the A/B ring.
             return max(4 * M * N, 128 * R * (M + N))
 
 
@@ -64,6 +78,8 @@ def make_file_contents(dconf: DirConfig, fconf: FileConfig, kconf_list: List[Ker
     lines.append("from __future__ import annotations")
     lines.append(f"from exo.platforms.Sm90.tk_gemm_util import {make_gemm}, GemmConfig, f32, bf16")
     lines.append("from dataclasses import replace")
+    K_cluster = dconf.fixed_K_cluster()
+    fixed_K_cluster_line = "" if K_cluster is None else f"\n    K_cluster={K_cluster},"
     lines.append(f"""
 {warning}
 base_config = GemmConfig(
@@ -77,7 +93,7 @@ base_config = GemmConfig(
     ncta_M={fconf.ncta_M},
     ncta_N={fconf.ncta_N},
     enable_split_k={fconf.enable_split_k},
-    ping_pong={fconf.ping_pong},
+    ping_pong={dconf.ping_pong},{fixed_K_cluster_line}
 )""")
 
     lines.append("")
@@ -86,8 +102,8 @@ base_config = GemmConfig(
     lines.append("")
 
     for kconf in kconf_list:
-        smem_usage = kconf.make_smem_usage(fconf.ping_pong)
-        assert smem_usage <= 227 << 10, (smem_usage, k, fconf)
+        smem_usage = kconf.make_smem_usage(dconf.ping_pong)
+        assert smem_usage <= 227 << 10, (smem_usage, kconf, fconf)
         M, N, R = kconf.cta_M, kconf.cta_N, kconf.ring_depth
         exo_conf = f"replace(base_config, cta_M={M}, cta_N={N}, ring_depth={R})"
         lines.append(f"gemm_m{M}n{N}r{R} = {make_gemm}({exo_conf}, cases)")
@@ -99,36 +115,39 @@ base_config = GemmConfig(
 
 
 dir_configs = [
-    DirConfig(schedule_it=False, AB_type="f32"),
-    DirConfig(schedule_it=False, AB_type="bf16"),
-    DirConfig(schedule_it=True, AB_type="f32"),
-    DirConfig(schedule_it=True, AB_type="bf16"),
+    DirConfig(schedule_it=schedule_it, AB_type=AB_type, ping_pong=ping_pong)
+    for schedule_it in (False, True)
+    for AB_type in ("f32", "bf16")
+    for ping_pong in (False, True)
 ]
 
 for dconf in dir_configs:
     dir_path = os.path.join(script_dir, dconf.make_dir_name())
     os.makedirs(dir_path, exist_ok=True)
 
-    file_configs = []
-    for (k, p) in ((False, False), (True, False), (False, True)):
-        for (M, N) in ((1, 1), (2, 1), (1, 2)):
-            fconf = FileConfig(ncta_M=M, ncta_N=N, enable_split_k=k, ping_pong=p)
-            if not fconf.ping_pong or not dconf.schedule_it:
-                # schedule_gemm doesn't support ping-pong kernel.
-                file_configs.append(fconf)
+    file_configs = [
+        FileConfig(ncta_M=M, ncta_N=N, enable_split_k=k)
+        # Split-K ping-pong skipped for now.
+        for k in ((False,) if dconf.ping_pong else (False, True))
+        # Not (2, 2): universally bad for performance.
+        for (M, N) in ((1, 1), (2, 1), (1, 2))
+    ]
 
+    if dconf.ping_pong:
+        kconf_list = [
+            # CUTLASS-like: 128x128(x64 for bf16) tile per math warpgroup.
+            KernelConf(cta_M=256, cta_N=128, ring_depth=5),
+            KernelConf(cta_M=128, cta_N=256, ring_depth=4),
+            KernelConf(cta_M=128, cta_N=128, ring_depth=8),
+        ]
+    else:
+        kconf_list = [
+            # CUTLASS-like: 256x128(x64 for bf16) cooperative tile.
+            KernelConf(cta_M=256, cta_N=128, ring_depth=4),
+            KernelConf(cta_M=256, cta_N=192, ring_depth=4),
+            KernelConf(cta_M=128, cta_N=256, ring_depth=4),
+        ]
     for fconf in file_configs:
-        if fconf.ping_pong:
-            kconf_list = [
-                KernelConf(cta_M=256, cta_N=128, ring_depth=2),
-                KernelConf(cta_M=128, cta_N=128, ring_depth=3),
-                KernelConf(cta_M=128, cta_N=96, ring_depth=4),
-            ]
-        else:
-            kconf_list = [
-                KernelConf(cta_M=256, cta_N=192, ring_depth=4),
-                KernelConf(cta_M=128, cta_N=256, ring_depth=4),
-            ]
         code = make_file_contents(dconf, fconf, kconf_list)
         with open(os.path.join(dir_path, fconf.make_file_name(dconf)), "wb") as f:
             f.write(code.encode("utf-8"))
