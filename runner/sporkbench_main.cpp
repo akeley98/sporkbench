@@ -118,8 +118,8 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ct
 {
     std::vector<GemmPlotInput> plots;
 
-    GemmPlotInput L1_square{"L1_square", "GEMM, non-batched, M=N=K", "M", {}};
-    GemmPlotInput L4_square{"L4_square", "GEMM, batched, L=4, M=N=K", "M", {}};
+    GemmPlotInput L1_square{"L1_square", "GEMM, L=1, M=N=K", "M", {}};
+    GemmPlotInput L4_square{"L4_square", "GEMM, L=4, M=N=K", "M", {}};
 
     auto add_MNK = [] (int M, int N, int K, GemmPlotInput& non_batched, GemmPlotInput& batched)
     {
@@ -132,10 +132,12 @@ std::vector<GemmPlotInput> generate_gemm_plot_inputs(CudaArch arch, GemmCaseT<Ct
     }
     else {
         if (arch != CudaArch::Sm80) {
-            GemmPlotInput L1K352{"L1K352", "GEMM, non-batched, N=1536, K=352", "M", {}};
-            GemmPlotInput L1K512{"L1K512", "GEMM, non-batched, N=1536, K=512", "M", {}};
-            GemmPlotInput L4K512{"L4K512", "GEMM, batched, L=4, N=1536, K=512", "M", {}};
-            GemmPlotInput L1K65536{"L1K65536", "GEMM, non-batched, N=1536, K=65536", "M", {}};
+            // NOTE: "batched" or "non-batched" in title overflows horizontally.
+            // Should say in prose that L is the batch count.
+            GemmPlotInput L1K352{"L1K352", "GEMM, L=1, N=1536, K=352", "M", {}};
+            GemmPlotInput L1K512{"L1K512", "GEMM, L=1, N=1536, K=512", "M", {}};
+            GemmPlotInput L4K512{"L4K512", "GEMM, L=4, N=1536, K=512", "M", {}};
+            GemmPlotInput L1K65536{"L1K65536", "GEMM, L=1, N=1536, K=65536", "M", {}};
             for (int M = 256; M <= 4096; M += 256) {
                 const int N = 1536;
                 add_MNK(M, N, 512, L1K512, L4K512);
