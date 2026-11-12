@@ -91,6 +91,25 @@ def exo_gemm_strategy_note(j_plot):
     return None
 
 
+def add_legacy_attn_hdim(j_plot):
+    """JSON from before run_sporkbench put Hdim in attention plot names/titles
+    (so Hdim 64 and 128 plots collided): add it, from the samples."""
+    title = j_plot["title"]
+    m = re.search(r"\((\w+)\.(\w+), (causal|non-causal)\)$", title)
+    if not title.startswith("Attention") or not m:
+        return
+    hdims = {j_sample["Hdim"] for j_sample in j_plot["samples"]}
+    assert len(hdims) == 1, f"{title}: expected one Hdim, got {hdims}"
+    (hdim,) = hdims
+    arch, T, causality = m.groups()
+    j_plot["title"] = title[: m.start()] + f"({arch}.{T}, Hdim={hdim}, {causality})"
+    name = j_plot["name"]
+    if name.endswith("_causal"):
+        j_plot["name"] = name[: -len("_causal")] + f"_h{hdim}_causal"
+    else:
+        j_plot["name"] = name + f"_h{hdim}"
+
+
 def get_peak_flops(j_plot) -> Optional[float]:
     """Peak for the "% of peak" axis (sm_90a only), else None."""
     title = j_plot["title"]
@@ -103,8 +122,8 @@ def get_peak_flops(j_plot) -> Optional[float]:
         return get_known_gpu(j_plot).tensor_peak_flops(m.group(2))
     elif "Attention" in title:
         # TODO not really peak for Attention.
-        # Title ends with " (sm_90a.{T}, causal)" or " (sm_90a.{T}, non-causal)"
-        m = re.search(r"\(sm_90a\.(\w+), (causal|non-causal)\)$", title)
+        # Title ends with " (sm_90a.{T}, Hdim={Hdim}, causal)" or ", non-causal)"
+        m = re.search(r"\(sm_90a\.(\w+), Hdim=\d+, (causal|non-causal)\)$", title)
         assert m, f"can't find T type in {title!r}"
         peak = get_known_gpu(j_plot).tensor_peak_flops(m.group(1))
         if m.group(2) == "non-causal":
@@ -271,6 +290,7 @@ if __name__ == "__main__":
 
     names_to_titles = {}
     for j_plot in j_top:
+        add_legacy_attn_hdim(j_plot)
         name = j_plot["name"]
         title = j_plot["title"]
         if name in names_to_titles:

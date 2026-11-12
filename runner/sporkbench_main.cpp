@@ -182,11 +182,13 @@ void fix_plot_names(std::vector<PlotInput>& plots, CudaArch arch, AttnFwdCaseT<T
     std::string title_suffix = " (";
     name_suffix += arch_name(arch);
     title_suffix += arch_name(arch);
-    name_suffix += "_" + T_name;
+    // Hdim distinguishes plots for different AttnFwdCaseT instances of the same T_type.
+    name_suffix += "_" + T_name + "_h" + std::to_string(Hdim);
     if (Causal) {
         name_suffix += "_causal";
     }
-    title_suffix += "." + T_name + ", " + (Causal ? "causal" : "non-causal") + ")";
+    title_suffix += "." + T_name + ", Hdim=" + std::to_string(Hdim) + ", "
+                 + (Causal ? "causal" : "non-causal") + ")";
     for (PlotInput& plot : plots) {
         plot.name += name_suffix;
         plot.title += title_suffix;
