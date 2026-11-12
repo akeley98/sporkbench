@@ -5,7 +5,9 @@ import json
 import math
 import sys
 import os
+import re
 from dataclasses import dataclass
+from typing import Optional
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
@@ -21,6 +23,49 @@ def get_case_name(j_kernel):
     if supports_split_k:
         name += ", K_split=" + str(j_kernel["K_split"])
     return name
+
+
+@dataclass(slots=True, frozen=True)
+class KnownGpu:
+    description: str
+    # Must match the run_sporkbench "gpu" info exactly.
+    name: str
+    sm_count: int
+    # Dense (no sparsity) tensor core peaks.
+    tf32_flops: float  # f32 inputs
+    fp16_flops: float  # f16 and bf16 inputs
+
+    def tensor_peak_flops(self, input_type: str) -> float:
+        if input_type == "f32":
+            return self.tf32_flops
+        if input_type in ("f16", "bf16"):
+            return self.fp16_flops
+        raise ValueError(f"{self.description}: no peak recorded for {input_type} inputs")
+
+
+# Source: NVIDIA H100 Tensor Core GPU datasheet,
+# https://resources.nvidia.com/en-us-hopper-architecture/nvidia-h100-tensor-c
+# which listed (H100 SXM | H100 PCIe; second number of each pair is with sparsity):
+#   Peak TF32 Tensor Core   494.7 TFLOPS | 989.4 TFLOPS     378 TFLOPS | 756 TFLOPS
+#   Peak FP16 Tensor Core   989.4 TFLOPS | 1978.9 TFLOPS    756 TFLOPS | 1513 TFLOPS
+# We use the dense numbers. (No FP8 numbers recorded yet.)
+known_gpus = [
+    KnownGpu("H100 SXM5", "NVIDIA H100 80GB HBM3", 132, tf32_flops=494.7e12, fp16_flops=989.4e12),
+    KnownGpu("H100 PCIe", "NVIDIA H100 PCIe", 114, tf32_flops=378e12, fp16_flops=756e12),
+]
+
+
+def get_known_gpu(j_plot) -> KnownGpu:
+    """Match the plot's "gpu" info (run_sporkbench) against known_gpus."""
+    j_gpu = j_plot.get("gpu")
+    if j_gpu is None:
+        # JSON from before run_sporkbench recorded the GPU; these were all H100 SXM5.
+        print(f"{j_plot['name']}: no GPU info, assuming H100 SXM5", file=sys.stderr)
+        return known_gpus[0]
+    for gpu in known_gpus:
+        if j_gpu["name"] == gpu.name and j_gpu["sm_count"] == gpu.sm_count:
+            return gpu
+    raise ValueError(f"{j_plot['name']}: unknown GPU {j_gpu!r}; add it to known_gpus")
 
 
 def exo_gemm_strategy_note(j_plot):
@@ -46,6 +91,31 @@ def exo_gemm_strategy_note(j_plot):
     return None
 
 
+def get_peak_flops(j_plot) -> Optional[float]:
+    """Peak for the "% of peak" axis (sm_90a only), else None."""
+    title = j_plot["title"]
+    if "sm_90a" not in title:
+        return None
+    if "GEMM" in title:
+        # Title ends with " (sm_90a.{C}.{AB}.{AB})"; peak depends on the input (AB) type.
+        m = re.search(r"\(sm_90a\.(\w+)\.(\w+)\.(\w+)\)$", title)
+        assert m and m.group(2) == m.group(3), f"can't find AB type in {title!r}"
+        return get_known_gpu(j_plot).tensor_peak_flops(m.group(2))
+    elif "Attention" in title:
+        # TODO not really peak for Attention.
+        # Title ends with " (sm_90a.{T}, causal)" or " (sm_90a.{T}, non-causal)"
+        m = re.search(r"\(sm_90a\.(\w+), (causal|non-causal)\)$", title)
+        assert m, f"can't find T type in {title!r}"
+        peak = get_known_gpu(j_plot).tensor_peak_flops(m.group(1))
+        if m.group(2) == "non-causal":
+            peak /= 2.0  # Preserves earlier behavior
+        return peak
+    elif "GEMV" in title:
+        return None  # GEMV peak (memory bandwidth) no longer maintained
+    else:
+        assert 0, f"implement peak for {title}"
+
+
 def plot(j_plot, output_dir_name):
     title = j_plot["title"]
     x_key = j_plot["x_axis"]
@@ -53,19 +123,9 @@ def plot(j_plot, output_dir_name):
     plt.title(title)
     ax = fig.gca()
 
-    want_peak = False
-    if "sm_90a" in title:
-        want_peak = True
-        if "GEMM" in title or "Attention" in title:
-            # TODO not really peak for Attention
-            h100_peak_flops = 494.5e+12
-            if "non-causal" not in title:
-                h100_peak_flops *= 2.0
-        elif "GEMV" in title:
-            # XXX Is TB 1 trillion bytes or 1 << 40 bytes?
-            h100_peak_flops = 3.35e+12 / 4 * 2
-        else:
-            assert 0, f"implement peak for {title}"
+    h100_peak_flops = get_peak_flops(j_plot)
+    want_peak = h100_peak_flops is not None
+    if want_peak:
         ax2 = ax.twinx()
     if "sm_100a" in title:
         assert 0, "TODO fill in peak performance info"
