@@ -45,6 +45,7 @@ These JSON files must contain a list of objects (`dict`) of the format:
         "B_major": str  # gemm only, "row" or "col"
         "C_major": str  # gemm only, "row" or "col"
         f"{arg}_max": int  # (optional) maximum supported value for {arg} (e.g. K_max)
+        f"{arg}_min": int  # (optional) minimum supported value for {arg} (e.g. K_min), gemm only
         f"{arg}_divisor": int  # (optional) this must divide {arg} (e.g. K_divisor)
         "A_type": str  # "f16" or "f32", gemm only
         "B_type": str  # "f16" or "f32", gemm only

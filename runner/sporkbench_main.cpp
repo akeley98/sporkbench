@@ -308,7 +308,8 @@ std::vector<KernelCaseEntry<KernelCase>> generate_cases(
         else {
             // Schedule this kernel for testing.
             for (int K_split = 1; K_split <= 16; K_split *= 2) {
-                if (K_split <= entry.p_case->K_split_max && K_split % entry.p_case->K_split_divisor == 0) {
+                const auto& c = *entry.p_case;
+                if (c.K_split_min <= K_split && K_split <= c.K_split_max && K_split % c.K_split_divisor == 0) {
                     entry.K_split = K_split;
                     case_entries.push_back(entry);
                     case_permutations.push_back(int(case_permutations.size()));

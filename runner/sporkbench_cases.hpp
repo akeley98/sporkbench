@@ -135,15 +135,27 @@ struct GemmCaseT
     int K_cluster_divisor;
     int K_cluster_max;
     bool test_correctness_only;
+    // Optional minimum sizes (reverse of *_max); last, so existing
+    // positional initializers can leave them at their defaults.
+    int L_min = 1;
+    int M_min = 1;
+    int N_min = 1;
+    int K_split_min = 1;
+    int K_cluster_min = 1;
+
+    bool supports_K_split(int K_split) const
+    {
+        return K_split_min <= K_split && K_split <= K_split_max && K_split % K_split_divisor == 0;
+    }
 
     bool supports(GemmSize size) const
     {
         return (
-            size.L <= L_max && size.L % L_divisor == 0 &&
-            size.M <= M_max && size.M % M_divisor == 0 &&
-            size.N <= N_max && size.N % N_divisor == 0 &&
-            size.K_split <= K_split_max && size.K_split % K_split_divisor == 0 &&
-            size.K_cluster <= K_cluster_max && size.K_cluster % K_cluster_divisor == 0
+            L_min <= size.L && size.L <= L_max && size.L % L_divisor == 0 &&
+            M_min <= size.M && size.M <= M_max && size.M % M_divisor == 0 &&
+            N_min <= size.N && size.N <= N_max && size.N % N_divisor == 0 &&
+            supports_K_split(size.K_split) &&
+            K_cluster_min <= size.K_cluster && size.K_cluster <= K_cluster_max && size.K_cluster % K_cluster_divisor == 0
         );
     }
 
@@ -215,6 +227,7 @@ struct GemvCase
 
     // For now we hard-wire all gemv kernels not to do split K.
     static constexpr int K_split_divisor = 1;
+    static constexpr int K_split_min = 1;
     static constexpr int K_split_max = 1;
 
     bool supports(GemvSize size) const
@@ -245,6 +258,7 @@ struct AttnFwdCaseT
     static constexpr bool Causal = Causal_;
     static constexpr int Hdim = Hdim_;
     static constexpr int K_split_divisor = 1;
+    static constexpr int K_split_min = 1;
     static constexpr int K_split_max = 1;
 
     CudaArch cuda_arch;

@@ -116,6 +116,11 @@ class GemmCase:
     B_type: str
     C_type: str
     test_correctness_only: bool
+    L_min: int
+    M_min: int
+    N_min: int
+    K_split_min: int
+    K_cluster_min: int
 
 
 @dataclass(slots=True)
@@ -180,21 +185,21 @@ c_lines.append("\n\nnamespace sporkbench {\n")
 
 gemm_split_k_keys = {
     "proc", "args", "algorithm", "A_major", "B_major", "C_major",
-    "L_divisor", "L_max",
-    "M_divisor", "M_max",
-    "N_divisor", "N_max",
-    "K_split_divisor", "K_split_max",
-    "K_cluster_divisor", "K_cluster_max",
+    "L_divisor", "L_min", "L_max",
+    "M_divisor", "M_min", "M_max",
+    "N_divisor", "N_min", "N_max",
+    "K_split_divisor", "K_split_min", "K_split_max",
+    "K_cluster_divisor", "K_cluster_min", "K_cluster_max",
     "A_type", "B_type", "C_type",
     "test_correctness_only",
 }
 
 gemm_no_split_k_keys = {
     "proc", "args", "algorithm", "row_major", "A_major", "B_major", "C_major",
-    "L_divisor", "L_max",
-    "M_divisor", "M_max",
-    "N_divisor", "N_max",
-    "K_divisor", "K_max",
+    "L_divisor", "L_min", "L_max",
+    "M_divisor", "M_min", "M_max",
+    "N_divisor", "N_min", "N_max",
+    "K_divisor", "K_min", "K_max",
     "A_type", "B_type", "C_type",
     "test_correctness_only",
 }
@@ -208,10 +213,12 @@ def add_gemm_case(fname, cuda_arch, j_obj):
         raise ValueError(f"Expect K argument alone XOR K_split and K_cluster arguments together")
     if split_k_support:
         K_divisor_key = "K_cluster_divisor"
+        K_min_key = "K_cluster_min"
         K_max_key = "K_cluster_max"
         allowed_keys = gemm_split_k_keys
     else:
         K_divisor_key = "K_divisor"
+        K_min_key = "K_min"
         K_max_key = "K_max"
         allowed_keys = gemm_no_split_k_keys
     for key in j_obj:
@@ -249,9 +256,18 @@ def add_gemm_case(fname, cuda_arch, j_obj):
         B_type=ABC_types[1],
         C_type=ABC_types[2],
         test_correctness_only=bool(j_obj.get("test_correctness_only")),
+        L_min=get_positive_int(j_obj, "L_min", 1),
+        M_min=get_positive_int(j_obj, "M_min", 1),
+        N_min=get_positive_int(j_obj, "N_min", 1),
+        K_split_min=get_positive_int(j_obj, "K_split_min", 1),
+        K_cluster_min=get_positive_int(j_obj, K_min_key, 1),
     )
     if not batch_support and case_obj.L_max != 1:
         raise ValueError(f"L argument must be listed if L_max != 1")
+    for dim in ("L", "M", "N", "K_split", "K_cluster"):
+        lo, hi = getattr(case_obj, dim + "_min"), getattr(case_obj, dim + "_max")
+        if lo > hi:
+            raise ValueError(f"{proc}: {dim}_min={lo} > {dim}_max={hi}")
 
     # Generate run function
     c_args = ["ctxt"]
@@ -460,6 +476,8 @@ for abc_types in sorted(gemm_supported_ABC_types):
         c_lines.append(f"    {gemm_case.K_split_divisor}, {gemm_case.K_split_max},  // K_split")
         c_lines.append(f"    {gemm_case.K_cluster_divisor}, {gemm_case.K_cluster_max},  // K_cluster")
         c_lines.append(f"    {int(gemm_case.test_correctness_only)},  // test_correctness_only")
+        c_lines.append(f"    {gemm_case.L_min}, {gemm_case.M_min}, {gemm_case.N_min},  // L_min, M_min, N_min")
+        c_lines.append(f"    {gemm_case.K_split_min}, {gemm_case.K_cluster_min},  // K_split_min, K_cluster_min")
         c_lines.append("  },")
         del gemm_case
     c_lines.append("  };\n")
